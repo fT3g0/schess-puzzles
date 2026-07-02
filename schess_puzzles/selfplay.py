@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import importlib.util
 import math
@@ -98,6 +98,7 @@ def _play_one_game(engine, rng: random.Random, config: SelfPlayConfig, game_inde
         "ResignCp": str(config.resign_cp),
         "ResignMoves": str(config.resign_moves),
         "StopAfterNoSchessMaterial": str(config.stop_after_no_schess_material),
+        "UciMoves": " ".join(moves),
     }
     return _format_pgn(headers, sans, result)
 
@@ -218,6 +219,3 @@ def _load_uci_engine(uci_module_path: Path, engine_path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.Engine([str(engine_path)])
-
-
-

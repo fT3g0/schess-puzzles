@@ -51,6 +51,9 @@ def iter_uci_games(path: Path, configured_variant: str = "seirawan") -> list[Par
     for game in games:
         variant = _normalize_variant(game.headers.get("Variant", configured_variant))
         start_fen = game.headers.get("FEN") or pyffish.start_fen(variant)
+        if game.headers.get("UciMoves"):
+            parsed.append(ParsedUciGame(game.headers, variant, start_fen, game.headers["UciMoves"].split()))
+            continue
         moves: list[str] = []
         for san in game.moves:
             moves.append(san_to_uci(variant, start_fen, moves, san))
