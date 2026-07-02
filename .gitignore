@@ -1,0 +1,33 @@
+﻿# Local configuration and credentials
+config.toml
+cookies_env.txt
+cookie_raw.txt
+*.cookie
+*.cookies
+.env
+
+# Generated/private data
+/data/raw/
+/data/cache/
+/data/positions/
+/data/puzzles/
+/logs/
+
+# Local dependency checkouts and virtualenvs
+/external/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local one-off sample downloads
+*.pgn
+*.pgn4.txt
+pychess-variants_*
+
+# Editor/OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

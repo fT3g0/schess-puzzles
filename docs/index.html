@@ -1,0 +1,49 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S-Chess Tactics</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <section class="board-area">
+      <div class="board-shell">
+        <div id="board" class="board" aria-label="Chess board"></div>
+      </div>
+    </section>
+    <aside class="panel">
+      <header class="panel-head">
+        <div>
+          <p id="counter" class="counter">0 / 0</p>
+          <h1 id="title">S-Chess Tactics</h1>
+        </div>
+        <button id="random" class="icon-button" title="Random puzzle">↯</button>
+      </header>
+
+      <div class="controls">
+        <button id="prev">Previous</button>
+        <button id="next">Next</button>
+        <button id="reset">Reset</button>
+      </div>
+
+      <div class="filters">
+        <label><input id="show-hidden" type="checkbox"> Show hidden-by-default</label>
+        <label><input id="show-check" type="checkbox" checked> Check evasions</label>
+        <label><input id="show-recapture" type="checkbox" checked> Recaptures</label>
+      </div>
+
+      <p id="status" class="status">Loading puzzles...</p>
+      <p id="source" class="source"></p>
+
+      <button id="reveal" class="primary">Reveal solution</button>
+      <section id="solution" class="solution hidden">
+        <p id="line"></p>
+        <p id="details"></p>
+      </section>
+    </aside>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

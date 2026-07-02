@@ -1,0 +1,24 @@
+[engine]
+path = "E:\\Documents\\Schach\\Engines\\Fairy_Stockfish\\fairy-stockfish_x86-64-modern.exe"
+variant = "seirawan"
+depth = 10
+
+[paths]
+variant_puzzler = "external\\chess-variant-puzzler"
+raw_games = "data\\raw"
+positions = "data\\positions"
+puzzles = "data\\puzzles"
+
+[sources.pychess]
+enabled = true
+base_url = "https://www.pychess.org"
+
+[sources.chess_com]
+enabled = false
+base_url = "https://api.chess.com/pub"
+
+[pipeline]
+loose_depth = 8
+strict_depth = 14
+min_rating = 0
+max_puzzles = 1000
