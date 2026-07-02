@@ -335,7 +335,31 @@ Then open `http://localhost:8765`. Hidden-by-default tactics are still exported
 with tags such as `standard-like`, `trivial-recapture`, `trivial-capture`, and
 `check-evasion`, so the frontend can expose or suppress them without another
 engine pass.
-## Setup
+
+For GitHub Pages, sync the generated `web/` folder into `docs/` before
+committing:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\Publish-WebToDocs.ps1
+```
+
+To grow the public set from local Fairy-Stockfish self-play until a target
+visible count is reached:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\Grow-SelfPlayToTarget.ps1 -TargetVisible 500
+```
+
+The growth script is resume-aware. If it is interrupted after generating raw
+self-play PGNs but before analysis finishes, rerunning it reuses the existing raw
+batch. It also recombines reports, exports `web/public/puzzles.json`, and syncs
+`docs/` after each completed batch.
+
+Current rough yield baseline: Chess.com real games produced about 121 visible
+puzzles from 1342 games, while local self-play batches produced about 47 visible
+puzzles from 260 generated games. Self-play is denser per game, but the confirmed
+engine analysis is the bottleneck, so reaching 500 visible puzzles is an
+unattended multi-hour run at the current settings.## Setup
 
 Create a virtual environment and install dependencies:
 
@@ -364,4 +388,5 @@ python -m schess_puzzles.cli solve data/puzzles/puzzles.jsonl
 
 The scaffold is intentionally conservative: source fetchers can be expanded per
 site once the exact endpoints and account requirements are known.
+
 

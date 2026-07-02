@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import math
@@ -24,6 +24,7 @@ class SelfPlayConfig:
     blunder_chance: float = 0.15
     resign_cp: int = 700
     resign_moves: int = 5
+    stop_after_no_schess_material: bool = True
     seed: int | None = None
     event: str = "S-Chess Fairy-Stockfish self-play"
     prefix: str = "selfplay"
@@ -72,6 +73,9 @@ def _play_one_game(engine, rng: random.Random, config: SelfPlayConfig, game_inde
             termination = f"{'White' if side == 'w' else 'Black'} resigned"
             break
         moves.append(move)
+        if config.stop_after_no_schess_material and not _has_schess_material(pyffish.get_fen(config.variant, start_fen, moves)):
+            termination = "No hawk or elephant material remains"
+            break
 
     sans = pyffish.get_san_moves(config.variant, start_fen, moves)
     headers = {
@@ -93,6 +97,7 @@ def _play_one_game(engine, rng: random.Random, config: SelfPlayConfig, game_inde
         "TemperatureCp": str(config.temperature_cp),
         "ResignCp": str(config.resign_cp),
         "ResignMoves": str(config.resign_moves),
+        "StopAfterNoSchessMaterial": str(config.stop_after_no_schess_material),
     }
     return _format_pgn(headers, sans, result)
 
@@ -157,6 +162,11 @@ def _weighted_choice(candidates: list[tuple[str, int]], rng: random.Random, temp
     return rng.choices([move for move, _score in candidates], weights=weights, k=1)[0]
 
 
+def _has_schess_material(fen: str) -> bool:
+    board_and_pockets = fen.split()[0]
+    return any(piece in board_and_pockets for piece in "HEhe")
+
+
 def _configure_strength(engine, config: SelfPlayConfig) -> None:
     if config.skill_level is not None:
         engine.setoption("Skill Level", config.skill_level)
@@ -208,3 +218,6 @@ def _load_uci_engine(uci_module_path: Path, engine_path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.Engine([str(engine_path)])
+
+
+

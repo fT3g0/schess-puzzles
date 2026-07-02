@@ -199,6 +199,7 @@ def main() -> None:
     selfplay.add_argument("--blunder-chance", type=float, default=0.15)
     selfplay.add_argument("--resign-cp", type=int, default=700)
     selfplay.add_argument("--resign-moves", type=int, default=5)
+    selfplay.add_argument("--keep-playing-after-no-schess-material", action="store_true")
     selfplay.add_argument("--seed", type=int)
 
     args = parser.parse_args()
@@ -942,6 +943,7 @@ def _selfplay(config_path: Path, args: argparse.Namespace) -> None:
         blunder_chance=args.blunder_chance,
         resign_cp=args.resign_cp,
         resign_moves=args.resign_moves,
+        stop_after_no_schess_material=not args.keep_playing_after_no_schess_material,
         seed=args.seed,
         prefix=args.prefix,
     )
@@ -1359,6 +1361,8 @@ def _detect_input_kind(path: Path) -> str:
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

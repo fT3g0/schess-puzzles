@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_by": "schess_puzzles export-web",
-  "count": 440,
+  "count": 453,
   "puzzles": [
     {
       "id": "7b8da32bb1e0b910",
@@ -10523,6 +10523,303 @@
         "best_cp": 135,
         "second_cp": -815,
         "second_san": "b4"
+      },
+      "tags": [
+        "recapture",
+        "trivial-recapture"
+      ],
+      "hidden_by_default": true
+    },
+    {
+      "id": "08c01e528bd06d93",
+      "variant": "seirawan",
+      "fen": "r1b1kher/pppq4/4pBnp/3p4/1b1P1H2/2N1Q3/PPP1PPPP/R3KB1R[E] w KQFkq - 1 12",
+      "side": "w",
+      "move_number": 12,
+      "kind": "drawing",
+      "solution": [
+        "f4h5"
+      ],
+      "solution_san": "Hh5",
+      "source_url": "local-selfplay",
+      "reason": "only move escapes the losing range; confirmed at depth 20",
+      "scores": {
+        "best_cp": 84,
+        "second_cp": -284,
+        "second_san": "Bxh8"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "2c1c64773994624c",
+      "variant": "seirawan",
+      "fen": "rnb1kb1r/pp3ppp/2p2n2/3pp1N1/qP2N3/P3P3/2PP1PPP/R1BQKB1R[EHeh] w KQCDFkqbcf - 0 8",
+      "side": "w",
+      "move_number": 8,
+      "kind": "winning",
+      "solution": [
+        "e4c3",
+        "f8b4",
+        "c3a4"
+      ],
+      "solution_san": "Nc3",
+      "source_url": "local-selfplay",
+      "reason": "only move keeps the side to move in winning territory; confirmed at depth 20",
+      "scores": {
+        "best_cp": 761,
+        "second_cp": 0,
+        "second_san": "Nxf7"
+      },
+      "tags": [
+        "standard-like"
+      ],
+      "hidden_by_default": true
+    },
+    {
+      "id": "5f878640af13b478",
+      "variant": "seirawan",
+      "fen": "r2qerk1/2p1bppp/pp1ppn2/4n2b/3PP3/2NHBN1P/PPP2PP1/R1KQ1B1R[Eh] w ADFHad - 4 12",
+      "side": "w",
+      "move_number": 12,
+      "kind": "winning",
+      "solution": [
+        "d4e5"
+      ],
+      "solution_san": "dxe5",
+      "source_url": "local-selfplay",
+      "reason": "only move keeps the side to move in winning territory; confirmed at depth 20",
+      "scores": {
+        "best_cp": 430,
+        "second_cp": -100,
+        "second_san": "Hf4"
+      },
+      "tags": [
+        "recapture",
+        "trivial-recapture"
+      ],
+      "hidden_by_default": true
+    },
+    {
+      "id": "bd536e7c2d7b07dc",
+      "variant": "seirawan",
+      "fen": "r1e2k2/1pp2pp1/3H1rn1/p3p2p/1b2P1b1/N1P1PP2/PP1B2NP/R2QK1R1[] b - - 0 21",
+      "side": "b",
+      "move_number": 21,
+      "kind": "winning",
+      "solution": [
+        "c8d6",
+        "a3c4",
+        "d6c4"
+      ],
+      "solution_san": "Exd6",
+      "source_url": "local-selfplay",
+      "reason": "only move keeps the side to move in winning territory; confirmed at depth 20",
+      "scores": {
+        "best_cp": 223,
+        "second_cp": -176,
+        "second_san": "Bxd6"
+      },
+      "tags": [
+        "recapture",
+        "check-evasion",
+        "trivial-recapture"
+      ],
+      "hidden_by_default": true
+    },
+    {
+      "id": "7037ad70e87cc68c",
+      "variant": "seirawan",
+      "fen": "r4k2/1ppe1pp1/5rn1/pN2p2p/2Q1P3/2B1Pb2/PP4NP/R3K1R1[] b - - 3 25",
+      "side": "b",
+      "move_number": 25,
+      "kind": "winning",
+      "solution": [
+        "c7c6"
+      ],
+      "solution_san": "c6",
+      "source_url": "local-selfplay",
+      "reason": "only move keeps the side to move in winning territory; confirmed at depth 20",
+      "scores": {
+        "best_cp": 373,
+        "second_cp": 100,
+        "second_san": "Rb6"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "1072843b2f578af8",
+      "variant": "seirawan",
+      "fen": "r2qkbnr/ph1n1pp1/3p3p/2P5/B2pP2P/2P2N2/P2N1PP1/RbBQK2R[He] w KQCDkqdfg - 0 12",
+      "side": "w",
+      "move_number": 12,
+      "kind": "winning",
+      "solution": [
+        "c5c6",
+        "g8f6e",
+        "c6b7"
+      ],
+      "solution_san": "c6",
+      "source_url": "local-selfplay",
+      "reason": "only move keeps the side to move in winning territory; confirmed at depth 20",
+      "scores": {
+        "best_cp": 353,
+        "second_cp": -161,
+        "second_san": "Rxb1"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "4ec086fdce4b2bc5",
+      "variant": "seirawan",
+      "fen": "r1e1k2r/1ph2Np1/pqpb1n2/2nppb1p/7P/PPN1PQH1/1BPP1PP1/RE2K2R[] w KQkq - 0 16",
+      "side": "w",
+      "move_number": 16,
+      "kind": "drawing",
+      "solution": [
+        "f7d6"
+      ],
+      "solution_san": "Nxd6+",
+      "source_url": "local-selfplay",
+      "reason": "only move escapes the losing range; confirmed at depth 20",
+      "scores": {
+        "best_cp": -53,
+        "second_cp": -327,
+        "second_san": "Na4"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "bf9afa9ad2bd0e70",
+      "variant": "seirawan",
+      "fen": "r1e4r/1p2k1p1/2p5/p6Q/2Pq2nP/P3PPH1/3PK1P1/R6R[] b - - 0 27",
+      "side": "b",
+      "move_number": 27,
+      "kind": "winning",
+      "solution": [
+        "d4c4",
+        "d2d3",
+        "c4c2"
+      ],
+      "solution_san": "Qxc4+",
+      "source_url": "local-selfplay",
+      "reason": "only move keeps the side to move in winning territory; confirmed at depth 20",
+      "scores": {
+        "best_cp": 1569,
+        "second_cp": 144,
+        "second_san": "Nxe3"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "bb664d3693caf572",
+      "variant": "seirawan",
+      "fen": "3r1k2/1p2e3/1Rp2np1/p6r/2PP1H1P/P4P2/3P1KP1/5R2[] w - - 4 35",
+      "side": "w",
+      "move_number": 35,
+      "kind": "drawing",
+      "solution": [
+        "f1e1",
+        "d8d4",
+        "e1e7"
+      ],
+      "solution_san": "Re1",
+      "source_url": "local-selfplay",
+      "reason": "only move escapes the losing range; confirmed at depth 20",
+      "scores": {
+        "best_cp": 59,
+        "second_cp": -230,
+        "second_san": "g4"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "ca4d8c21f38adde9",
+      "variant": "seirawan",
+      "fen": "3r3r/1p2e1k1/1Rp2np1/p7/2PP3P/P4P2/3PHKP1/4R3[] w - - 8 37",
+      "side": "w",
+      "move_number": 37,
+      "kind": "drawing",
+      "solution": [
+        "e2f4"
+      ],
+      "solution_san": "Hf4",
+      "source_url": "local-selfplay",
+      "reason": "only move escapes the losing range; confirmed at depth 20",
+      "scores": {
+        "best_cp": 0,
+        "second_cp": -179,
+        "second_san": "Hc3"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "9a9a3b0c3502f049",
+      "variant": "seirawan",
+      "fen": "r5e1/1bk2N2/4p2p/1pnp1p2/8/P1Q1P1P1/P4P2/4K2R[] w K - 0 38",
+      "side": "w",
+      "move_number": 38,
+      "kind": "winning",
+      "solution": [
+        "c3c5"
+      ],
+      "solution_san": "Qxc5+",
+      "source_url": "local-selfplay",
+      "reason": "only move keeps the side to move in winning territory; confirmed at depth 20",
+      "scores": {
+        "best_cp": 700,
+        "second_cp": -115,
+        "second_san": "Nxh6"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "88d8702cce0c23e4",
+      "variant": "seirawan",
+      "fen": "1nr1b3/8/1k1ep2R/1p1p1p2/5N2/P3P1P1/P4P2/3Q1K2[] w - - 11 47",
+      "side": "w",
+      "move_number": 47,
+      "kind": "winning",
+      "solution": [
+        "h6e6",
+        "b6b7",
+        "e6d6"
+      ],
+      "solution_san": "Rxe6",
+      "source_url": "local-selfplay",
+      "reason": "only move keeps the side to move in winning territory; confirmed at depth 20",
+      "scores": {
+        "best_cp": 484,
+        "second_cp": 0,
+        "second_san": "Qd4+"
+      },
+      "tags": [],
+      "hidden_by_default": false
+    },
+    {
+      "id": "4bd4b318c2dc47cc",
+      "variant": "seirawan",
+      "fen": "8/5rkp/1P6/2b2Ppn/1Pp1B3/8/4K2R/6E1[] b - - 5 58",
+      "side": "b",
+      "move_number": 58,
+      "kind": "drawing",
+      "solution": [
+        "c5g1"
+      ],
+      "solution_san": "Bxg1",
+      "source_url": "local-selfplay",
+      "reason": "only move escapes the losing range; confirmed at depth 20",
+      "scores": {
+        "best_cp": 0,
+        "second_cp": -255,
+        "second_san": "Nf4+"
       },
       "tags": [
         "recapture",

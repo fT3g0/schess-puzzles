@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import collections
 import hashlib
@@ -36,6 +36,7 @@ def main() -> None:
     puzzles = Path("data/puzzles")
     raw = Path("data/raw")
     chess = read_rows(puzzles / "chesscom_all_report.jsonl")
+    all_report = read_rows(puzzles / "all_report.jsonl")
     self_reports = sorted(
         puzzles.glob("selfplay_batch*_report.jsonl"),
         key=lambda path: int(re.search(r"batch(\d+)", path.name).group(1)),
@@ -44,6 +45,7 @@ def main() -> None:
     self_rows = [(name, record) for name, rows in self_by_batch for record in rows]
     production = [("chess", record) for record in chess] + [("self", record) for _, record in self_rows]
 
+    print(f"all_report tactics={len(all_report)} visible_default={visible_count(all_report)}")
     print(f"chess_all tactics={len(chess)} visible_default={visible_count(chess)}")
     if self_reports:
         print(f"selfplay reports={len(self_reports)} first={self_reports[0].name} last={self_reports[-1].name}")
@@ -87,3 +89,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
