@@ -1,4 +1,4 @@
-﻿# S-Chess Puzzle Generator
+# S-Chess Puzzle Generator
 
 Local-first tooling for generating and solving Seirawan chess / S-Chess tactics.
 
@@ -107,6 +107,17 @@ python -m schess_puzzles.cli fetch-chesscom-archive --days 0-9999 --title seiraw
 
 Without `CHESSCOM_COOKIE`, chess.com PGN4 commands fail cleanly.
 
+If you have copied only the Chess.com `ACCESS_TOKEN`, save it locally as
+`access_token.txt` and use the integrated scrape/analyze command:
+
+```powershell
+python -m schess_puzzles.cli chesscom-next-tactics 20 --pages 50
+```
+
+The command reads `access_token.txt` by default, downloads the next new Seirawan
+PGN4 files it can find in the archive search, analyzes exactly those files as the
+next `chesscom_batchNN`, refreshes review reports, updates `web/public/puzzles.json`,
+and syncs `docs/` for GitHub Pages. The token file is ignored by git.
 `fetch-chesscom-archive` discovers archive game numbers and downloads each PGN4
 file into `data/raw`. It skips existing files and waits one second between
 downloads by default:

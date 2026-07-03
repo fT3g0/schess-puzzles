@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import csv
@@ -102,6 +102,30 @@ def main() -> None:
     crawl_chesscom.add_argument("--delay", type=float, default=1.0)
     crawl_chesscom.add_argument("--debug-socket", action="store_true")
 
+    chesscom_next = subparsers.add_parser("chesscom-next-tactics")
+    chesscom_next.add_argument("games", type=int)
+    chesscom_next.add_argument("--config", default="config.toml")
+    chesscom_next.add_argument("--access-token-file", type=Path, default=Path("access_token.txt"))
+    chesscom_next.add_argument("--cookie")
+    chesscom_next.add_argument("--player-id", type=int)
+    chesscom_next.add_argument("--username")
+    chesscom_next.add_argument("--days", default="0-9999")
+    chesscom_next.add_argument("--game-type", default="")
+    chesscom_next.add_argument("--rating-type", default="")
+    chesscom_next.add_argument("--title", default="seirawan")
+    chesscom_next.add_argument("--start-page", type=int, default=0)
+    chesscom_next.add_argument("--pages", type=int, default=50)
+    chesscom_next.add_argument("--archive-timeout", type=int, default=5)
+    chesscom_next.add_argument("--delay", type=float, default=1.0)
+    chesscom_next.add_argument("--batch-name")
+    chesscom_next.add_argument("--depth", type=int, default=10)
+    chesscom_next.add_argument("--multipv", type=int, default=6)
+    chesscom_next.add_argument("--confirm-depth", type=int, default=20)
+    chesscom_next.add_argument("--confirm-multipv", type=int, default=6)
+    chesscom_next.add_argument("--max-plies", type=int, default=5)
+    chesscom_next.add_argument("--eval-cache-dir", type=Path, default=Path("data/cache/evals"))
+    chesscom_next.add_argument("--no-update-public", action="store_true")
+    chesscom_next.add_argument("--debug-socket", action="store_true")
     inspect_sources = subparsers.add_parser("inspect-sources")
     inspect_sources.add_argument("files", nargs="+", type=Path)
 
@@ -226,6 +250,8 @@ def main() -> None:
         _fetch_chesscom_archive(Path(args.config), args)
     elif args.command == "crawl-chesscom":
         _crawl_chesscom(Path(args.config), args)
+    elif args.command == "chesscom-next-tactics":
+        _chesscom_next_tactics(Path(args.config), args)
     elif args.command == "inspect-sources":
         _inspect_sources(args.files)
     elif args.command == "pipeline":
@@ -548,6 +574,170 @@ def _crawl_chesscom(config_path: Path, args: argparse.Namespace) -> None:
         f"downloaded={downloaded} skipped={skipped} failed={failed} queued={len(player_queue)}"
     )
 
+
+def _chesscom_next_tactics(config_path: Path, args: argparse.Namespace) -> None:
+    import time
+
+    if args.games <= 0:
+        raise SystemExit("games must be positive")
+
+    config = load_config(config_path)
+    settings = config.raw.get("sources", {}).get("chess_com", {})
+    cookie = _chesscom_auth_cookie(args)
+    client = ChessComClient(settings.get("base_url", "https://api.chess.com/pub"))
+
+    downloaded_files: list[Path] = []
+    seen_ids: set[str] = set()
+    page = args.start_page
+    pages_done = 0
+    failed = 0
+    skipped_existing = 0
+
+    while len(downloaded_files) < args.games and pages_done < args.pages:
+        try:
+            game_ids = client.discover_variant_archive(
+                cookie=cookie,
+                player_id=args.player_id,
+                username=args.username,
+                days=args.days,
+                game_type=args.game_type,
+                rating_type=args.rating_type,
+                title=args.title,
+                start_page=page,
+                limit_pages=1,
+                archive_timeout=args.archive_timeout,
+                debug=args.debug_socket,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+
+        print(f"archive page {page}: discovered {len(game_ids)} game(s)")
+        pages_done += 1
+        page += 1
+
+        for game_id in game_ids:
+            if game_id in seen_ids:
+                continue
+            seen_ids.add(game_id)
+            target = config.paths.raw_games / f"chesscom_{game_id}.pgn4.txt"
+            if target.exists():
+                skipped_existing += 1
+                continue
+            try:
+                result = client.download_variant_pgn4(game_id, config.paths.raw_games, cookie=cookie, debug_socket=args.debug_socket)
+            except Exception as exc:
+                failed += 1
+                print(f"  failed {game_id}: {exc}")
+                continue
+            downloaded_files.append(result.path)
+            print(f"  wrote {result.path} ({len(downloaded_files)}/{args.games})")
+            if len(downloaded_files) >= args.games:
+                break
+            if args.delay > 0:
+                time.sleep(args.delay)
+
+    if not downloaded_files:
+        raise SystemExit(
+            "No new Chess.com games downloaded. "
+            f"pages_searched={pages_done} skipped_existing={skipped_existing} failed={failed}"
+        )
+
+    batch_name = args.batch_name or f"chesscom_batch{_next_chesscom_batch_number():02d}"
+    jsonl = Path("data/puzzles") / f"{batch_name}.jsonl"
+    report = Path("data/puzzles") / f"{batch_name}_report.jsonl"
+    html = Path("data/puzzles") / f"{batch_name}_review.html"
+
+    _select_batch(
+        config_path,
+        argparse.Namespace(
+            files=downloaded_files,
+            glob="",
+            start_index=0,
+            limit=0,
+            depth=args.depth,
+            multipv=args.multipv,
+            confirm_depth=args.confirm_depth,
+            confirm_multipv=args.confirm_multipv,
+            win_cp=200,
+            draw_floor_cp=-80,
+            losing_cp=-150,
+            min_gap_cp=150,
+            exclude_recaptures=False,
+            extend_critical=True,
+            max_plies=args.max_plies,
+            allow_check_reply_first=False,
+            include_standard_positions=False,
+            output_jsonl=jsonl,
+            report_jsonl=report,
+            eval_cache_dir=args.eval_cache_dir,
+        ),
+    )
+    _refresh_report_flags(report, None)
+    _review_html(report, html)
+
+    if not args.no_update_public:
+        _combine_reports([], "data/puzzles/chesscom_batch*_report.jsonl", Path("data/puzzles/chesscom_all_report.jsonl"))
+        _review_html(Path("data/puzzles/chesscom_all_report.jsonl"), Path("data/puzzles/chesscom_all_review.html"))
+        _merge_into_all_report(report)
+        _review_html(Path("data/puzzles/all_report.jsonl"), Path("data/puzzles/all_review.html"))
+        _export_web(Path("data/puzzles/all_report.jsonl"), Path("web/public/puzzles.json"))
+        _sync_web_to_docs()
+
+    print(
+        "Done. "
+        f"downloaded={len(downloaded_files)} skipped_existing={skipped_existing} failed={failed} "
+        f"batch={batch_name} report={report}"
+    )
+
+
+def _chesscom_auth_cookie(args: argparse.Namespace) -> str:
+    import os
+
+    if getattr(args, "cookie", None):
+        return args.cookie
+    cookie = os.getenv("CHESSCOM_COOKIE")
+    if cookie:
+        return cookie
+    token = os.getenv("CHESSCOM_ACCESS_TOKEN")
+    token_file = getattr(args, "access_token_file", None)
+    if not token and token_file and token_file.exists():
+        token = token_file.read_text(encoding="utf-8").strip()
+    if not token:
+        raise SystemExit("Set CHESSCOM_COOKIE, CHESSCOM_ACCESS_TOKEN, --cookie, or provide access_token.txt.")
+    token = token.strip().strip('"').strip("'")
+    if token.lower().startswith("cookie:"):
+        token = token.split(":", 1)[1].strip()
+    if ";" in token or "=" in token:
+        return token
+    return f"ACCESS_TOKEN={token}"
+
+
+def _next_chesscom_batch_number() -> int:
+    max_batch = 0
+    for path in Path("data/puzzles").glob("chesscom_batch*_report.jsonl"):
+        match = re.match(r"chesscom_batch(\d+)_report\.jsonl$", path.name)
+        if match:
+            max_batch = max(max_batch, int(match.group(1)))
+    return max_batch + 1
+
+
+def _merge_into_all_report(new_report: Path) -> None:
+    all_report = Path("data/puzzles/all_report.jsonl")
+    inputs = [path for path in (all_report, new_report) if path.exists()]
+    tmp = Path("data/puzzles/all_report.next.jsonl")
+    _combine_reports(inputs, "", tmp)
+    tmp.replace(all_report)
+
+
+def _sync_web_to_docs() -> None:
+    web_dir = Path("web")
+    docs_dir = Path("docs")
+    if docs_dir.exists():
+        shutil.rmtree(docs_dir)
+    shutil.copytree(web_dir, docs_dir)
+    (docs_dir / "CNAME").write_text("www.schesspuzzles.com\n", encoding="ascii")
+    (docs_dir / ".nojekyll").write_text("", encoding="ascii")
+    print("Copied web/ to docs/ for GitHub Pages.")
 
 def _pipeline(config_path: Path, input_path: Path | None) -> None:
     config = load_config(config_path)

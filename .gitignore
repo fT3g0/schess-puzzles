@@ -1,7 +1,8 @@
-﻿# Local configuration and credentials
+# Local configuration and credentials
 config.toml
 cookies_env.txt
 cookie_raw.txt
+access_token.txt
 *.cookie
 *.cookies
 .env
