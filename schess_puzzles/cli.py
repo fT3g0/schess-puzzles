@@ -193,6 +193,23 @@ def main() -> None:
     select_batch.add_argument("--report-jsonl", type=Path, default=Path("data/puzzles/chesscom_batch20_report.jsonl"))
     select_batch.add_argument("--eval-cache-dir", type=Path, default=Path("data/cache/evals"))
 
+
+    suggest_fen = subparsers.add_parser("suggest-fen")
+    suggest_fen.add_argument("fen")
+    suggest_fen.add_argument("--config", default="config.toml")
+    suggest_fen.add_argument("--depth", type=int, default=20)
+    suggest_fen.add_argument("--multipv", type=int, default=8)
+    suggest_fen.add_argument("--win-cp", type=int, default=200)
+    suggest_fen.add_argument("--draw-floor-cp", type=int, default=-80)
+    suggest_fen.add_argument("--losing-cp", type=int, default=-150)
+    suggest_fen.add_argument("--min-gap-cp", type=int, default=150)
+    suggest_fen.add_argument("--max-plies", type=int, default=5)
+    suggest_fen.add_argument("--allow-check-reply-first", action="store_true")
+    suggest_fen.add_argument("--include-standard-positions", action="store_true")
+    suggest_fen.add_argument("--source", default="suggested")
+    suggest_fen.add_argument("--output-jsonl", type=Path, default=Path("data/puzzles/suggested.jsonl"))
+    suggest_fen.add_argument("--report-jsonl", type=Path, default=Path("data/puzzles/suggested_report.jsonl"))
+    suggest_fen.add_argument("--eval-cache-dir", type=Path, default=Path("data/cache/evals"))
     export_web = subparsers.add_parser("export-web")
     export_web.add_argument("report_jsonl", type=Path, nargs="?", default=Path("data/puzzles/all_report.jsonl"))
     export_web.add_argument("output_json", type=Path, nargs="?", default=Path("web/public/puzzles.json"))
@@ -267,6 +284,8 @@ def main() -> None:
         _select(Path(args.config), args.input, args)
     elif args.command == "select-batch":
         _select_batch(Path(args.config), args)
+    elif args.command == "suggest-fen":
+        _suggest_fen(Path(args.config), args)
     elif args.command == "review-html":
         _review_html(args.report_jsonl, args.output_html)
     elif args.command == "export-web":
@@ -974,6 +993,78 @@ def _select_batch(config_path: Path, args: argparse.Namespace) -> None:
     )
 
 
+
+def _suggest_fen(config_path: Path, args: argparse.Namespace) -> None:
+    from .selector import PositionRecord, classify_position, confirm_selection, extend_selection, _load_uci_engine
+
+    config = load_config(config_path)
+    fields = args.fen.split()
+    if len(fields) < 6:
+        raise SystemExit("FEN must include side, castling, en-passant, halfmove, and fullmove fields.")
+
+    selector_config = SelectionConfig(
+        depth=args.depth,
+        multipv=args.multipv,
+        win_cp=args.win_cp,
+        draw_floor_cp=args.draw_floor_cp,
+        losing_cp=args.losing_cp,
+        min_gap_cp=args.min_gap_cp,
+        max_plies=args.max_plies,
+        extend_critical=True,
+        prefer_quiet_replies=not args.allow_check_reply_first,
+        eval_cache_dir=args.eval_cache_dir,
+        skip_standard_positions=not args.include_standard_positions,
+        confirm_depth=None,
+        confirm_multipv=None,
+    )
+    position = PositionRecord(
+        ply=0,
+        move_number=int(fields[-1]),
+        side=fields[1],
+        fen=args.fen,
+        variant=config.engine.variant,
+        site=args.source,
+        previous_move=None,
+        previous_uci=None,
+    )
+
+    uci_path = config.paths.variant_puzzler / "uci.py"
+    engine = _load_uci_engine(uci_path, config.engine.path)
+    selection = classify_position(position, evaluate_position(position, engine, selector_config), selector_config)
+    selections = []
+    if selection:
+        selection = confirm_selection(selection, engine, selector_config)
+    if selection:
+        selection = extend_selection(selection, engine, selector_config)
+        selections.append(selection)
+
+    puzzles = [
+        Puzzle(
+            fen=item.position.fen,
+            moves=item.best.pv or [item.best.move],
+            variant=item.position.variant,
+            source=item.position.site,
+            tags=[item.kind, *_review_flags(item), "suggested"],
+        )
+        for item in selections
+    ]
+    write_jsonl(puzzles, args.output_jsonl)
+    _write_selection_report(selections, args.report_jsonl)
+
+    if not selections:
+        print("No tactic passed the high-depth candidate check.")
+        return
+
+    item = selections[0]
+    second = item.second
+    second_text = f"{second.san} {second.score_cp:+d}" if second else "-"
+    print(
+        f"{item.kind:8s} move={item.position.move_number} side={item.position.side} "
+        f"best={item.best.san} {item.best.score_cp:+d} second={second_text} "
+        f"flags={','.join(_review_flags(item)) or '-'} "
+        f"line={' '.join(item.best.pv or [item.best.move])}"
+    )
+    print(f"Wrote {args.output_jsonl} and {args.report_jsonl}")
 def _write_selection_report(selections, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -1108,6 +1199,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
                     "kind": record.get("kind"),
                     "solution": record.get("line", []),
                     "solution_san": record.get("best_san"),
+                    "solution_line_san": _web_line_san(record),
                     "source_url": record.get("source"),
                     "reason": record.get("reason"),
                     "scores": {
@@ -1116,6 +1208,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
                         "second_san": record.get("second_san"),
                     },
                     "tags": flags,
+                    "categories": _web_categories(record, flags),
                     "hidden_by_default": bool(hidden_flags & set(flags)),
                 }
             )
@@ -1130,6 +1223,93 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
     output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {output_json} with {len(puzzles)} puzzle(s)")
 
+
+
+
+def _web_line_san(record: dict) -> str:
+    line = record.get("line", []) or []
+    if not line:
+        return ""
+    try:
+        import pyffish
+
+        san_moves = pyffish.get_san_moves("seirawan", record.get("fen", ""), line)
+    except Exception:
+        return " ".join(line)
+    return " ".join(san_moves)
+def _web_categories(record: dict, flags: list[str]) -> dict:
+    return {
+        "phase": _web_phase(record),
+        "motifs": _web_motifs(record, flags),
+        "length": _web_length(record),
+    }
+
+
+def _web_phase(record: dict) -> str:
+    move_number = int(record.get("move_number") or _web_fen_move_number(record.get("fen", "")) or 0)
+    if move_number and move_number <= 12:
+        return "opening"
+    if _web_is_endgame_fen(record.get("fen", "")):
+        return "endgame"
+    return "middlegame"
+
+
+def _web_length(record: dict) -> str:
+    plies = max(1, len(record.get("line", [])))
+    if plies <= 1:
+        return "one-move"
+    if plies <= 5:
+        return "medium"
+    return "long"
+
+
+def _web_motifs(record: dict, flags: list[str]) -> list[str]:
+    motifs: set[str] = set()
+    flag_set = set(flags)
+    san = str(record.get("best_san") or "")
+    line = record.get("line", []) or []
+    first = str(line[0]) if line else str(record.get("best_uci") or "")
+
+    if record.get("kind") == "drawing":
+        motifs.add("equality")
+    elif record.get("kind") == "winning":
+        motifs.add("crushing" if (record.get("best_score_cp") or 0) >= 600 else "advantage")
+
+    if "check-evasion" in flag_set:
+        motifs.add("defensive-move")
+    if flag_set & {"recapture", "trivial-recapture", "complex-recapture"}:
+        motifs.add("recapture")
+    if "#" in san:
+        motifs.add("checkmate")
+    elif "+" in san:
+        motifs.add("check")
+    if "=" in san or re.search(r"[a-h][18][a-h][18][nbrqeh]", first, re.IGNORECASE):
+        motifs.add("promotion")
+    if "/H" in san or "/E" in san or re.search(r"(^|[^a-zA-Z])[HE](x|[a-h]|\d|$)", san):
+        motifs.add("fairy-piece")
+    if len(first) >= 5 and first[4].lower() in {"h", "e"}:
+        motifs.add("gating")
+    if san and "x" not in san and "+" not in san and "#" not in san:
+        motifs.add("quiet-move")
+    return sorted(motifs or {"advantage"})
+
+
+def _web_fen_move_number(fen: str) -> int:
+    fields = fen.split()
+    if not fields:
+        return 0
+    try:
+        return int(fields[-1])
+    except ValueError:
+        return 0
+
+
+def _web_is_endgame_fen(fen: str) -> bool:
+    board = (fen.split(" ", 1)[0] if fen else "").split("[", 1)[0]
+    pieces = [char for char in board if char.isalpha()]
+    queens = sum(1 for piece in pieces if piece.lower() == "q")
+    non_king_pawn = sum(1 for piece in pieces if piece.lower() not in {"k", "p"})
+    return queens == 0 and non_king_pawn <= 4
 
 def _web_puzzle_id(record: dict) -> str:
     import hashlib

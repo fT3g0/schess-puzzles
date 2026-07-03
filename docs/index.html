@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -19,7 +19,10 @@
           <p id="counter" class="counter">0 / 0</p>
           <h1 id="title">S-Chess Tactics</h1>
         </div>
-        <button id="random" class="icon-button" title="Random puzzle">↯</button>
+        <div class="header-actions">
+          <button id="theme" class="icon-button" title="Toggle dark mode">DM</button>
+          <button id="random" class="icon-button" title="Random puzzle">R</button>
+        </div>
       </header>
 
       <div class="controls">
@@ -30,14 +33,29 @@
 
       <div class="filters">
         <label><input id="show-hidden" type="checkbox"> Show hidden-by-default</label>
-        <label><input id="show-check" type="checkbox" checked> Check evasions</label>
-        <label><input id="show-recapture" type="checkbox" checked> Recaptures</label>
+        <div id="hidden-options" class="subfilters hidden">
+          <label><input id="show-check" type="checkbox" checked> Check evasions</label>
+          <label><input id="show-recapture" type="checkbox" checked> Recaptures</label>
+        </div>
+        <label>Board theme <select id="board-theme">
+          <option value="classic">Classic green</option>
+          <option value="wood">Wood</option>
+          <option value="blue">Blue</option>
+          <option value="gray">Gray</option>
+        </select></label>
+        <button id="category-toggle" type="button">Filter by categories</button>
+        <div id="category-options" class="select-filters hidden">
+          <label>Phase <select id="phase-filter"><option value="">All</option></select></label>
+          <label>Motif <select id="motif-filter"><option value="">All</option></select></label>
+          <label>Length <select id="length-filter"><option value="">All</option></select></label>
+        </div>
       </div>
 
       <p id="status" class="status">Loading puzzles...</p>
       <p id="source" class="source"></p>
 
       <button id="reveal" class="primary">Reveal solution</button>
+      <a id="analysis" class="analysis-link hidden" target="_blank" rel="noopener">Analyze on pychess</a>
       <section id="solution" class="solution hidden">
         <p id="line"></p>
         <p id="details"></p>
