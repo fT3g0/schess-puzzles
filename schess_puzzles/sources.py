@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import html
 import json
 import os
@@ -71,13 +72,14 @@ class ChessComClient:
         target_dir: Path,
         cookie: str | None = None,
         debug_socket: bool = False,
+        auth_user_id: int | None = None,
     ) -> DownloadedFile:
         game_id = extract_chesscom_variant_game_id(game_id_or_url)
         cookie = cookie or os.getenv("CHESSCOM_COOKIE")
 
         pgn4 = None
         if cookie:
-            pgn4 = fetch_chesscom_pgn4_from_socket(game_id, cookie, debug=debug_socket)
+            pgn4 = fetch_chesscom_pgn4_from_socket(game_id, cookie, debug=debug_socket, auth_user_id=auth_user_id)
 
         if pgn4 is None:
             url = f"https://www.chess.com/variants/game/{game_id}"
@@ -109,6 +111,7 @@ class ChessComClient:
         limit_pages: int = 1,
         archive_timeout: int = 5,
         debug: bool = False,
+        auth_user_id: int | None = None,
     ) -> list[str]:
         return discover_chesscom_variant_archive(
             cookie=cookie,
@@ -122,6 +125,7 @@ class ChessComClient:
             limit_pages=limit_pages,
             archive_timeout=archive_timeout,
             debug=debug,
+            auth_user_id=auth_user_id,
         )
 
     def resolve_variant_player_id(self, *, cookie: str, username: str, debug: bool = False) -> int | None:
@@ -183,8 +187,9 @@ def fetch_chesscom_pgn4_from_socket(
     cookie: str,
     timeout: int = 30,
     debug: bool = False,
+    auth_user_id: int | None = None,
 ) -> str | None:
-    user_context = fetch_chesscom_user_context(cookie)
+    user_context = fetch_chesscom_user_context(cookie, auth_user_id=auth_user_id)
     headers = [
         "Origin: https://www.chess.com",
         "User-Agent: Mozilla/5.0",
@@ -247,8 +252,9 @@ def discover_chesscom_variant_archive(
     limit_pages: int = 1,
     archive_timeout: int = 5,
     debug: bool = False,
+    auth_user_id: int | None = None,
 ) -> list[str]:
-    user_context = fetch_chesscom_user_context(cookie)
+    user_context = fetch_chesscom_user_context(cookie, auth_user_id=auth_user_id)
     if not user_context.get("id"):
         raise ValueError("Could not read authenticated chess.com user context from cookie.")
     ws = _open_chesscom_variants_socket(cookie)
@@ -373,15 +379,43 @@ def _open_chesscom_variants_socket(cookie: str):
     )
 
 
-def fetch_chesscom_user_context(cookie: str) -> dict:
+def fetch_chesscom_user_context(cookie: str, auth_user_id: int | None = None) -> dict:
     response = _fetch_chesscom_variants_page(cookie)
     response.raise_for_status()
     context = _extract_chesscom_context(response.text)
     user = context.get("user") or {}
-    if not isinstance(user, dict):
-        return {}
-    return user
+    if isinstance(user, dict) and user.get("id"):
+        return user
+    return _access_token_user_context(cookie, auth_user_id)
 
+
+
+def _access_token_user_context(cookie: str, auth_user_id: int | None) -> dict:
+    if auth_user_id is None:
+        return {}
+    token = _cookie_value(cookie, "ACCESS_TOKEN")
+    if not token:
+        return {}
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    try:
+        payload = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    uuid = claims.get("sub")
+    if not uuid:
+        return {}
+    return {"id": int(auth_user_id), "uuid": uuid}
+
+
+def _cookie_value(cookie: str, name: str) -> str | None:
+    for part in cookie.split(";"):
+        key, _, value = part.strip().partition("=")
+        if key == name:
+            return value.strip().strip('"').strip("'")
+    return None
 
 def inspect_chesscom_auth(cookie: str) -> dict:
     response = _fetch_chesscom_variants_page(cookie)

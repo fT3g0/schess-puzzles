@@ -111,8 +111,13 @@ If you have copied only the Chess.com `ACCESS_TOKEN`, save it locally as
 `access_token.txt` and use the integrated scrape/analyze command:
 
 ```powershell
-python -m schess_puzzles.cli chesscom-next-tactics 20 --pages 50
+python -m schess_puzzles.cli chesscom-next-tactics 20 --pages 50 --auth-user-id 7448926
 ```
+
+`ACCESS_TOKEN` alone authenticates the websocket but does not expose the numeric
+variants user id in the HTML page context. Pass it with `--auth-user-id`, set
+`CHESSCOM_USER_ID`, or add a second line to `access_token.txt` such as
+`CHESSCOM_USER_ID=7448926`.
 
 The command reads `access_token.txt` by default, downloads the next new Seirawan
 PGN4 files it can find in the archive search, analyzes exactly those files as the

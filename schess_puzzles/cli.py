@@ -106,6 +106,7 @@ def main() -> None:
     chesscom_next.add_argument("games", type=int)
     chesscom_next.add_argument("--config", default="config.toml")
     chesscom_next.add_argument("--access-token-file", type=Path, default=Path("access_token.txt"))
+    chesscom_next.add_argument("--auth-user-id", type=int)
     chesscom_next.add_argument("--cookie")
     chesscom_next.add_argument("--player-id", type=int)
     chesscom_next.add_argument("--username")
@@ -583,7 +584,7 @@ def _chesscom_next_tactics(config_path: Path, args: argparse.Namespace) -> None:
 
     config = load_config(config_path)
     settings = config.raw.get("sources", {}).get("chess_com", {})
-    cookie = _chesscom_auth_cookie(args)
+    cookie, auth_user_id = _chesscom_auth(args)
     client = ChessComClient(settings.get("base_url", "https://api.chess.com/pub"))
 
     downloaded_files: list[Path] = []
@@ -607,6 +608,7 @@ def _chesscom_next_tactics(config_path: Path, args: argparse.Namespace) -> None:
                 limit_pages=1,
                 archive_timeout=args.archive_timeout,
                 debug=args.debug_socket,
+                auth_user_id=auth_user_id,
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
@@ -624,7 +626,7 @@ def _chesscom_next_tactics(config_path: Path, args: argparse.Namespace) -> None:
                 skipped_existing += 1
                 continue
             try:
-                result = client.download_variant_pgn4(game_id, config.paths.raw_games, cookie=cookie, debug_socket=args.debug_socket)
+                result = client.download_variant_pgn4(game_id, config.paths.raw_games, cookie=cookie, debug_socket=args.debug_socket, auth_user_id=auth_user_id)
             except Exception as exc:
                 failed += 1
                 print(f"  failed {game_id}: {exc}")
@@ -690,26 +692,52 @@ def _chesscom_next_tactics(config_path: Path, args: argparse.Namespace) -> None:
     )
 
 
-def _chesscom_auth_cookie(args: argparse.Namespace) -> str:
+def _chesscom_auth(args: argparse.Namespace) -> tuple[str, int | None]:
     import os
 
     if getattr(args, "cookie", None):
-        return args.cookie
+        return args.cookie, _chesscom_auth_user_id(args, {})
     cookie = os.getenv("CHESSCOM_COOKIE")
     if cookie:
-        return cookie
-    token = os.getenv("CHESSCOM_ACCESS_TOKEN")
-    token_file = getattr(args, "access_token_file", None)
-    if not token and token_file and token_file.exists():
-        token = token_file.read_text(encoding="utf-8").strip()
+        return cookie, _chesscom_auth_user_id(args, {})
+
+    values = _read_auth_file(getattr(args, "access_token_file", None))
+    token = os.getenv("CHESSCOM_ACCESS_TOKEN") or values.get("ACCESS_TOKEN") or values.get("TOKEN") or values.get("RAW")
     if not token:
         raise SystemExit("Set CHESSCOM_COOKIE, CHESSCOM_ACCESS_TOKEN, --cookie, or provide access_token.txt.")
     token = token.strip().strip('"').strip("'")
     if token.lower().startswith("cookie:"):
         token = token.split(":", 1)[1].strip()
-    if ";" in token or "=" in token:
-        return token
-    return f"ACCESS_TOKEN={token}"
+    cookie = token if ";" in token or "=" in token else f"ACCESS_TOKEN={token}"
+    return cookie, _chesscom_auth_user_id(args, values)
+
+
+def _read_auth_file(path: Path | None) -> dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return {}
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+            values[key.strip().upper()] = value.strip()
+        elif "RAW" not in values:
+            values["RAW"] = line
+    return values
+
+
+def _chesscom_auth_user_id(args: argparse.Namespace, values: dict[str, str]) -> int | None:
+    import os
+
+    if getattr(args, "auth_user_id", None) is not None:
+        return int(args.auth_user_id)
+    value = os.getenv("CHESSCOM_USER_ID") or values.get("CHESSCOM_USER_ID") or values.get("USER_ID") or values.get("ID")
+    return int(value) if value else None
 
 
 def _next_chesscom_batch_number() -> int:
