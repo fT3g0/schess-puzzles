@@ -4,13 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>S-Chess Tactics</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260704-reserve">
 </head>
 <body>
   <main class="app">
     <section class="board-area">
-      <div class="board-shell">
-        <div id="board" class="board" aria-label="Chess board"></div>
+      <div class="board-layout">
+        <div class="board-shell">
+          <div id="board" class="board" aria-label="Chess board"></div>
+        </div>
+        <div id="reserve" class="reserve-panel" aria-label="Available insert pieces"></div>
       </div>
     </section>
     <aside class="panel">
@@ -29,6 +32,7 @@
         <button id="prev">Previous</button>
         <button id="next">Next</button>
         <button id="reset">Reset</button>
+        <button id="unmoved" type="button">Castling &amp; gating options</button>
       </div>
 
       <div class="filters">
@@ -52,6 +56,7 @@
       </div>
 
       <p id="status" class="status">Loading puzzles...</p>
+      <div id="move-choices" class="move-choices hidden"></div>
       <p id="source" class="source"></p>
 
       <button id="reveal" class="primary">Reveal solution</button>
@@ -62,6 +67,6 @@
       </section>
     </aside>
   </main>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260704-reserve"></script>
 </body>
 </html>

@@ -7,6 +7,8 @@ const state = {
   ply: 0,
   orientation: "w",
   solved: false,
+  pendingChoice: null,
+  showUnmoved: false,
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -19,11 +21,14 @@ const sourceEl = document.getElementById("source");
 const solutionEl = document.getElementById("solution");
 const lineEl = document.getElementById("line");
 const detailsEl = document.getElementById("details");
+const moveChoicesEl = document.getElementById("move-choices");
+const reserveEl = document.getElementById("reserve");
 
 const controls = {
   prev: document.getElementById("prev"),
   next: document.getElementById("next"),
   reset: document.getElementById("reset"),
+  unmoved: document.getElementById("unmoved"),
   random: document.getElementById("random"),
   reveal: document.getElementById("reveal"),
   theme: document.getElementById("theme"),
@@ -60,11 +65,13 @@ function bindControls() {
   controls.prev.addEventListener("click", () => gotoPuzzle(state.index - 1));
   controls.next.addEventListener("click", () => gotoPuzzle(state.index + 1));
   controls.reset.addEventListener("click", resetPuzzle);
+  controls.unmoved.addEventListener("click", toggleUnmovedPieces);
   controls.random.addEventListener("click", () => gotoPuzzle(Math.floor(Math.random() * state.filtered.length)));
   controls.reveal.addEventListener("click", revealSolution);
   controls.theme.addEventListener("click", toggleTheme);
   controls.categoryToggle.addEventListener("click", toggleCategoryFilters);
   controls.boardTheme.addEventListener("change", () => applyBoardTheme(controls.boardTheme.value));
+  document.addEventListener("keydown", onKeyDown);
   for (const input of [controls.showHidden, controls.showCheck, controls.showRecapture, controls.phase, controls.motif, controls.length]) {
     input.addEventListener("change", applyFilters);
   }
@@ -132,11 +139,13 @@ function resetPuzzle() {
   const puzzle = currentPuzzle();
   if (!puzzle) {
     boardEl.innerHTML = "";
+    renderReserve("");
     counterEl.textContent = "0 / 0";
     titleEl.textContent = "No puzzles";
     sourceEl.textContent = "";
     solutionEl.classList.add("hidden");
     controls.analysis.classList.add("hidden");
+    clearMoveChoices();
     setStatus("No puzzles match the current filters.", "bad");
     return;
   }
@@ -150,14 +159,17 @@ function resetPuzzle() {
   counterEl.textContent = `${state.index + 1} / ${state.filtered.length}`;
   titleEl.textContent = `${puzzle.side === "b" ? "Black" : "White"} to move`;
   sourceEl.textContent = sourceText(puzzle);
+  renderReserve(puzzle.fen);
+  updateUnmovedButton();
   lineEl.textContent = "";
   detailsEl.textContent = "";
+  clearMoveChoices();
   setStatus("Find the only move.");
   renderBoard();
 }
 
 function parseFenBoard(fen) {
-  const placement = (fen || "").split(/\s+/)[0] || "8/8/8/8/8/8/8/8";
+  const placement = boardPlacement(fen);
   const board = {};
   const ranks = placement.split("/");
   for (let rankIndex = 0; rankIndex < 8; rankIndex++) {
@@ -175,12 +187,21 @@ function parseFenBoard(fen) {
   return board;
 }
 
+function boardPlacement(fen) {
+  return (((fen || "").split(/\s+/)[0] || "8/8/8/8/8/8/8/8").split("[")[0]) || "8/8/8/8/8/8/8/8";
+}
+
+function pocketFromFen(fen) {
+  const placement = (fen || "").split(/\s+/)[0] || "";
+  return (placement.match(/\[([^\]]*)\]/) || ["", ""])[1];
+}
 function sideFromFen(fen) {
   return (fen || "").split(/\s+/)[1];
 }
 
 function renderBoard() {
   boardEl.innerHTML = "";
+  const unmovedSquares = state.showUnmoved ? unmovedSquaresFromFen(currentPuzzle()?.fen || "") : new Set();
   const ranks = state.orientation === "b" ? [1,2,3,4,5,6,7,8] : [8,7,6,5,4,3,2,1];
   const visibleFiles = state.orientation === "b" ? [...files].reverse() : files;
   for (const rank of ranks) {
@@ -189,6 +210,7 @@ function renderBoard() {
       const button = document.createElement("button");
       button.className = `square ${squareColor(square)}`;
       if (state.selected === square) button.classList.add("selected");
+      if (unmovedSquares.has(square)) button.classList.add("unmoved");
       button.dataset.square = square;
       button.addEventListener("click", () => onSquare(square));
       const piece = state.board[square];
@@ -204,6 +226,94 @@ function renderBoard() {
   }
 }
 
+function renderReserve(fen) {
+  if (!reserveEl) return;
+  const pocket = pocketFromFen(fen);
+  const white = [...pocket].filter((piece) => piece === "H" || piece === "E");
+  const black = [...pocket].filter((piece) => piece === "h" || piece === "e");
+  reserveEl.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "reserve-title";
+  title.textContent = `Insert pieces (${white.length + black.length})`;
+  reserveEl.appendChild(title);
+  reserveEl.appendChild(reserveRow("White", white));
+  reserveEl.appendChild(reserveRow("Black", black));
+}
+
+function reserveRow(label, pieces) {
+  const row = document.createElement("div");
+  row.className = "reserve-row";
+  const name = document.createElement("span");
+  name.className = "reserve-side";
+  name.textContent = label;
+  row.appendChild(name);
+  const list = document.createElement("span");
+  list.className = "reserve-list";
+  if (!pieces.length) {
+    const empty = document.createElement("span");
+    empty.className = "reserve-empty";
+    empty.textContent = "None";
+    list.appendChild(empty);
+  } else {
+    for (const piece of pieces) list.appendChild(reserveChip(piece));
+  }
+  row.appendChild(list);
+  return row;
+}
+
+function reserveChip(piece) {
+  const chip = document.createElement("span");
+  chip.className = `reserve-chip ${piece === piece.toUpperCase() ? "white-reserve" : "black-reserve"}`;
+  const img = pieceImage(piece);
+  chip.appendChild(img);
+  const label = document.createElement("span");
+  label.textContent = piece.toUpperCase() === "H" ? "Hawk" : "Elephant";
+  chip.appendChild(label);
+  return chip;
+}
+
+function toggleUnmovedPieces() {
+  state.showUnmoved = !state.showUnmoved;
+  updateUnmovedButton();
+  renderBoard();
+}
+
+function updateUnmovedButton() {
+  if (!controls.unmoved) return;
+  controls.unmoved.classList.toggle("active", state.showUnmoved);
+  const count = unmovedSquaresFromFen(currentPuzzle()?.fen || "").size;
+  controls.unmoved.disabled = count === 0;
+  if (count === 0) {
+    controls.unmoved.textContent = "No castling/gating options";
+  } else {
+    controls.unmoved.textContent = state.showUnmoved ? `Hide castling/gating options (${count})` : `Castling/gating options (${count})`;
+  }
+}
+
+function unmovedSquaresFromFen(fen) {
+  const fields = (fen || "").split(/\s+/);
+  const rights = fields[2] || "";
+  const board = parseFenBoard(fen);
+  const squares = new Set();
+  for (const right of rights) {
+    for (const square of squaresForRight(right)) {
+      const piece = board[square];
+      if (piece && piece.toUpperCase() !== "P") squares.add(square);
+    }
+  }
+  return squares;
+}
+
+function squaresForRight(right) {
+  if (right === "-") return [];
+  if (right === "K") return ["e1", "h1"];
+  if (right === "Q") return ["e1", "a1"];
+  if (right === "k") return ["e8", "h8"];
+  if (right === "q") return ["e8", "a8"];
+  if (/^[A-H]$/.test(right)) return [`${right.toLowerCase()}1`];
+  if (/^[a-h]$/.test(right)) return [`${right}8`];
+  return [];
+}
 function squareColor(square) {
   const file = files.indexOf(square[0]) + 1;
   const rank = Number(square[1]);
@@ -245,9 +355,31 @@ function tryUserMove(from, to) {
   const puzzle = currentPuzzle();
   const expected = (puzzle.solution || [])[state.ply];
   state.selected = null;
+  clearMoveChoices();
   if (!expected) return;
+
   const userPrefix = `${from}${to}`;
-  if (!expected.startsWith(userPrefix)) {
+  if (!moveMatchesPrefix(expected, userPrefix)) {
+    setStatus("That is not the tactic move.", "bad");
+    renderBoard();
+    return;
+  }
+
+  const choices = moveChoices(from, to, expected);
+  if (choices.length) {
+    showMoveChoices(userPrefix, expected, choices);
+    renderBoard();
+    return;
+  }
+
+  submitUserMove(expected);
+}
+
+function submitUserMove(move) {
+  const puzzle = currentPuzzle();
+  const expected = (puzzle.solution || [])[state.ply];
+  clearMoveChoices();
+  if (!moveMatchesExpected(move, expected)) {
     setStatus("That is not the tactic move.", "bad");
     renderBoard();
     return;
@@ -259,6 +391,124 @@ function tryUserMove(from, to) {
   setTimeout(autoReplies, 250);
 }
 
+function moveMatchesExpected(move, expected) {
+  return expectedSuffix(move) === expectedSuffix(expected) && moveMatchesPrefix(expected, move.slice(0, 4));
+}
+function moveMatchesPrefix(expected, userPrefix) {
+  return movePrefixes(expected).includes(userPrefix);
+}
+
+function movePrefixes(move) {
+  const prefix = move.slice(0, 4);
+  const aliases = new Set([prefix]);
+  const suffixless = move.slice(0, 4);
+  const castleAliases = {
+    e1g1: ["h1e1"],
+    h1e1: ["e1g1"],
+    e1c1: ["a1e1"],
+    a1e1: ["e1c1"],
+    e8g8: ["h8e8"],
+    h8e8: ["e8g8"],
+    e8c8: ["a8e8"],
+    a8e8: ["e8c8"],
+  };
+  for (const item of castleAliases[suffixless] || []) aliases.add(item);
+  return [...aliases];
+}
+
+function expectedSuffix(move) {
+  return move.length > 4 ? move[4].toLowerCase() : "";
+}
+
+function moveChoices(from, to, expected) {
+  const piece = state.board[from];
+  const suffix = expectedSuffix(expected);
+  if (piece && piece.toUpperCase() === "P" && (to[1] === "1" || to[1] === "8")) {
+    return [
+      ["q", "Queen", "Q"],
+      ["r", "Rook", "R"],
+      ["b", "Bishop", "B"],
+      ["n", "Knight", "N"],
+      ["h", "Hawk", "H"],
+      ["e", "Elephant", "E"],
+    ];
+  }
+  if (gatingAvailable(from, to, expected)) {
+    return [["", "No insert", "Enter"], ["h", "Hawk", "H"], ["e", "Elephant", "E"]];
+  }
+  if (suffix) return [[suffix, suffix.toUpperCase(), suffix.toUpperCase()]];
+  return [];
+}
+
+function gatingAvailable(from, to, expected) {
+  const suffix = expectedSuffix(expected);
+  if (suffix === "h" || suffix === "e") return true;
+  const piece = state.board[from];
+  if (!piece) return false;
+  if (piece.toUpperCase() === "P" && (to[1] === "1" || to[1] === "8")) return false;
+  const color = piece === piece.toUpperCase() ? "w" : "b";
+  if (!pocketHasGatePiece(currentPuzzle()?.fen || "", color)) return false;
+  return isBackRankMove(from, color) || isCastleMovePrefix(`${from}${to}`);
+}
+
+function pocketHasGatePiece(fen, color) {
+  const placement = (fen || "").split(/\s+/)[0] || "";
+  const pocket = (placement.match(/\[([^\]]*)\]/) || ["", ""])[1];
+  const pieces = color === "w" ? "HE" : "he";
+  return [...pocket].some((piece) => pieces.includes(piece));
+}
+
+function isBackRankMove(from, color) {
+  return color === "w" ? from[1] === "1" : from[1] === "8";
+}
+
+function isCastleMovePrefix(prefix) {
+  return ["e1g1", "h1e1", "e1c1", "a1e1", "e8g8", "h8e8", "e8c8", "a8e8"].includes(prefix);
+}
+
+function showMoveChoices(userPrefix, expected, choices) {
+  state.pendingChoice = { userPrefix, expected, choices };
+  moveChoicesEl.innerHTML = "";
+  const label = document.createElement("span");
+  label.className = "move-choice-label";
+  label.textContent = choices.some(([suffix]) => suffix === "") ? "Insert" : "Choose piece";
+  moveChoicesEl.appendChild(label);
+  for (const [suffix, labelText, hotkey] of choices) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.innerHTML = `${escapeHtml(labelText)} <kbd>${escapeHtml(hotkey)}</kbd>`;
+    button.addEventListener("click", () => submitUserMove(expectedWithUserPrefix(expected, userPrefix, suffix)));
+    moveChoicesEl.appendChild(button);
+  }
+  moveChoicesEl.classList.remove("hidden");
+  setStatus(choices.some(([suffix]) => suffix === "") ? "Choose insertion: H, E, or Enter for none." : "Choose the promoted piece.");
+}
+
+function expectedWithUserPrefix(expected, userPrefix, suffix) {
+  const expectedPrefix = expected.slice(0, 4);
+  if (userPrefix === expectedPrefix) return `${expectedPrefix}${suffix}`;
+  return `${userPrefix}${suffix}`;
+}
+
+function clearMoveChoices() {
+  state.pendingChoice = null;
+  moveChoicesEl.innerHTML = "";
+  moveChoicesEl.classList.add("hidden");
+}
+
+function onKeyDown(event) {
+  if (!state.pendingChoice || moveChoicesEl.classList.contains("hidden")) return;
+  const key = event.key.toLowerCase();
+  const choice = state.pendingChoice.choices.find(([suffix, , hotkey]) => {
+    if (hotkey.toLowerCase() === "enter") return key === "enter";
+    return hotkey.toLowerCase() === key;
+  });
+  if (!choice) return;
+
+  event.preventDefault();
+  const [suffix] = choice;
+  submitUserMove(expectedWithUserPrefix(state.pendingChoice.expected, state.pendingChoice.userPrefix, suffix));
+}
 function autoReplies() {
   const puzzle = currentPuzzle();
   if (!puzzle) return;
