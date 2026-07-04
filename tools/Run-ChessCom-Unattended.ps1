@@ -1,11 +1,18 @@
-param(
+﻿param(
     [string]$CookieFile = "cookies_env.txt",
+    [string]$AccessTokenFile = "access_token.txt",
+    [int]$AuthUserId = 7448926,
     [int]$ArchiveStartPage = 50,
     [int]$ArchivePages = 50,
     [int]$ArchiveChunkPages = 5,
     [double]$DownloadDelay = 1.0,
     [int]$BatchSize = 20,
     [int]$MaxBatches = 9999,
+    [int]$Workers = 1,
+    [int]$FetchRetries = 3,
+    [int]$FetchRetryDelaySeconds = 20,
+    [switch]$Profile,
+    [switch]$ProcessExistingOnly,
     [string]$ProcessedManifest = "data\puzzles\chesscom_processed_raw.txt",
     [switch]$CombineAfterEachChunk,
     [switch]$NoFinalCombine
@@ -20,6 +27,29 @@ function Invoke-Step {
     & python @CommandArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Invoke-StepWithRetry {
+    param(
+        [string[]]$CommandArgs,
+        [int]$Retries = 3,
+        [int]$DelaySeconds = 20
+    )
+    $attempt = 1
+    while ($true) {
+        try {
+            Invoke-Step $CommandArgs
+            return
+        } catch {
+            if ($attempt -ge $Retries) {
+                throw
+            }
+            Write-Warning "Command failed on attempt $attempt/$($Retries): $($_.Exception.Message)"
+            Write-Host "Retrying in $DelaySeconds second(s)..."
+            Start-Sleep -Seconds $DelaySeconds
+            $attempt += 1
+        }
     }
 }
 
@@ -86,11 +116,13 @@ function Get-UnprocessedChessComFiles {
 }
 
 function Invoke-ChessComFileBatch {
-    param([System.IO.FileInfo[]]$Files, [int]$Batch)
+    param([System.IO.FileInfo[]]$Files, [int]$Batch, [switch]$SkipManifest)
     $batchName = "chesscom_batch{0:D2}" -f $Batch
     $jsonl = "data\puzzles\$batchName.jsonl"
     $report = "data\puzzles\${batchName}_report.jsonl"
     $html = "data\puzzles\${batchName}_review.html"
+    $evalCache = "data\cache\evals\$batchName"
+    $profilePath = "data\profiles\${batchName}_selector.jsonl"
     $args = @("-m", "schess_puzzles.cli", "select-batch")
     foreach ($file in $Files) {
         $args += $file.FullName
@@ -100,23 +132,89 @@ function Invoke-ChessComFileBatch {
         "--depth", "10",
         "--multipv", "6",
         "--confirm-depth", "20",
-        "--confirm-multipv", "6",
+        "--confirm-multipv", "3",
+        "--confirm-fast-depth", "17",
         "--extend-critical",
-        "--max-plies", "5",
+        "--max-plies", "7",
+        "--extension-beam-width", "2",
+        "--eval-cache-dir", $evalCache,
         "--output-jsonl", $jsonl,
         "--report-jsonl", $report
     )
+    if ($Profile) {
+        New-Item -ItemType Directory -Force -Path "data\profiles" | Out-Null
+        if (Test-Path $profilePath) { Remove-Item -LiteralPath $profilePath -Force }
+        $args += @("--profile-jsonl", $profilePath)
+    }
     Invoke-Step $args
     Invoke-Step @("-m", "schess_puzzles.cli", "refresh-report-flags", $report)
     Invoke-Step @("-m", "schess_puzzles.cli", "review-html", $report, $html)
-    Add-ProcessedFiles $Files
+    if (-not $SkipManifest) { Add-ProcessedFiles $Files }
+    if ($Profile -and (Test-Path $profilePath)) {
+        Invoke-Step @("tools\summarize_profile.py", $profilePath)
+    }
 }
 
+function Invoke-ChessComFileBatchJob {
+    param([System.IO.FileInfo[]]$Files, [int]$Batch)
+    if ($Workers -le 1) {
+        Invoke-ChessComFileBatch -Files $Files -Batch $Batch
+        return
+    }
+    $root = (Get-Location).Path
+    $serializedFiles = @($Files | ForEach-Object { $_.FullName })
+    $profileEnabled = [bool]$Profile
+    $job = Start-Job -Name ("chesscom_batch{0:D2}" -f $Batch) -ScriptBlock {
+        param($Root, $FilePaths, $BatchNumber, $ProfileEnabled)
+        Set-Location $Root
+        $batchName = "chesscom_batch{0:D2}" -f $BatchNumber
+        $jsonl = "data\puzzles\$batchName.jsonl"
+        $report = "data\puzzles\${batchName}_report.jsonl"
+        $html = "data\puzzles\${batchName}_review.html"
+        $evalCache = "data\cache\evals\$batchName"
+        $profilePath = "data\profiles\${batchName}_selector.jsonl"
+        $args = @("-m", "schess_puzzles.cli", "select-batch")
+        foreach ($file in $FilePaths) { $args += $file }
+        $args += @(
+            "--limit", "0",
+            "--depth", "10",
+            "--multipv", "6",
+            "--confirm-depth", "20",
+            "--confirm-multipv", "3",
+            "--confirm-fast-depth", "17",
+            "--extend-critical",
+            "--max-plies", "7",
+            "--extension-beam-width", "2",
+            "--eval-cache-dir", $evalCache,
+            "--output-jsonl", $jsonl,
+            "--report-jsonl", $report
+        )
+        if ($ProfileEnabled) {
+            New-Item -ItemType Directory -Force -Path "data\profiles" | Out-Null
+            if (Test-Path $profilePath) { Remove-Item -LiteralPath $profilePath -Force }
+            $args += @("--profile-jsonl", $profilePath)
+        }
+        Write-Host ""
+        Write-Host "> python $($args -join ' ')"
+        & python @args
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & python -m schess_puzzles.cli refresh-report-flags $report
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & python -m schess_puzzles.cli review-html $report $html
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if ($ProfileEnabled -and (Test-Path $profilePath)) {
+            & python tools\summarize_profile.py $profilePath
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+    } -ArgumentList $root, $serializedFiles, $Batch, $profileEnabled
+    Add-Member -InputObject $job -MemberType NoteProperty -Name FilePaths -Value $serializedFiles
+    return $job
+}
 if (-not $env:CHESSCOM_COOKIE -and (Test-Path -LiteralPath $CookieFile)) {
     $env:CHESSCOM_COOKIE = Get-Content -LiteralPath $CookieFile -Raw
 }
-if (-not $env:CHESSCOM_COOKIE) {
-    throw "Set CHESSCOM_COOKIE or provide -CookieFile pointing to the formatted cookie file."
+if (-not $env:CHESSCOM_COOKIE -and -not (Test-Path -LiteralPath $AccessTokenFile)) {
+    throw "Set CHESSCOM_COOKIE, provide -CookieFile, or provide -AccessTokenFile."
 }
 
 New-Item -ItemType Directory -Force -Path logs | Out-Null
@@ -132,30 +230,65 @@ try {
 
     $pagesDone = 0
     $batchesDone = 0
-    while ($pagesDone -lt $ArchivePages -and $batchesDone -lt $MaxBatches) {
-        $page = $ArchiveStartPage + $pagesDone
-        $chunk = [Math]::Min($ArchiveChunkPages, $ArchivePages - $pagesDone)
+    while (($ProcessExistingOnly -or $pagesDone -lt $ArchivePages) -and $batchesDone -lt $MaxBatches) {
+        if (-not $ProcessExistingOnly) {
+            $page = $ArchiveStartPage + $pagesDone
+            $chunk = [Math]::Min($ArchiveChunkPages, $ArchivePages - $pagesDone)
 
-        Invoke-Step @(
-            "-m", "schess_puzzles.cli", "fetch-chesscom-archive",
-            "--days", "0-9999",
-            "--title", "seirawan",
-            "--start-page", "$page",
-            "--pages", "$chunk",
-            "--delay", "$DownloadDelay"
-        )
-        $pagesDone += $chunk
+            Invoke-StepWithRetry -Retries $FetchRetries -DelaySeconds $FetchRetryDelaySeconds -CommandArgs @(
+                "-m", "schess_puzzles.cli", "fetch-chesscom-archive",
+                "--access-token-file", $AccessTokenFile,
+                "--auth-user-id", "$AuthUserId",
+                "--days", "0-9999",
+                "--title", "seirawan",
+                "--start-page", "$page",
+                "--pages", "$chunk",
+                "--delay", "$DownloadDelay"
+            )
+            $pagesDone += $chunk
+        }
 
         while ($batchesDone -lt $MaxBatches) {
-            $unprocessed = Get-UnprocessedChessComFiles
+            $unprocessed = @(Get-UnprocessedChessComFiles)
             if ($unprocessed.Count -eq 0) {
                 Write-Host "No newly downloaded files to process. raw=$(Get-RawChessComCount) nextBatch=$(Get-NextChessComBatch)"
                 break
             }
-            $batch = Get-NextChessComBatch
-            $files = @($unprocessed | Select-Object -First $BatchSize)
-            Invoke-ChessComFileBatch -Files $files -Batch $batch
-            $batchesDone += 1
+            $waveSize = [Math]::Min([Math]::Max($Workers, 1), $MaxBatches - $batchesDone)
+            $jobs = @()
+            $batchBase = Get-NextChessComBatch
+            for ($i = 0; $i -lt $waveSize; $i++) {
+                $offset = $i * $BatchSize
+                $files = @($unprocessed | Select-Object -Skip $offset -First $BatchSize)
+                if ($files.Count -eq 0) { break }
+                $batch = $batchBase + $i
+                if ($Workers -le 1) {
+                    Invoke-ChessComFileBatch -Files $files -Batch $batch
+                    $batchesDone += 1
+                } else {
+                    Write-Host "Queueing chesscom_batch$('{0:D2}' -f $batch) files=$($files.Count)"
+                    $jobs += Invoke-ChessComFileBatchJob -Files $files -Batch $batch
+                }
+            }
+            if ($Workers -gt 1 -and $jobs.Count) {
+                Write-Host "Waiting for $($jobs.Count) worker(s)..."
+                Wait-Job -Job $jobs | Out-Null
+                $failed = $false
+                foreach ($job in $jobs) {
+                    Write-Host ""
+                    Write-Host "--- Worker $($job.Name) output ---"
+                    Receive-Job -Job $job
+                    if ($job.State -ne "Completed") {
+                        $failed = $true
+                    } else {
+                        $processedFiles = @($job.FilePaths | ForEach-Object { Get-Item -LiteralPath $_ })
+                        Add-ProcessedFiles $processedFiles
+                    }
+                    Remove-Job -Job $job
+                }
+                if ($failed) { throw "At least one Chess.com worker failed." }
+                $batchesDone += $jobs.Count
+            }
             if ($CombineAfterEachChunk) {
                 Invoke-Step @(
                     "-m", "schess_puzzles.cli", "combine-reports",
@@ -168,6 +301,7 @@ try {
                 )
             }
         }
+        if ($ProcessExistingOnly) { break }
     }
 
     if (-not $NoFinalCombine) {

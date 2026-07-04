@@ -1,10 +1,10 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>S-Chess Tactics</title>
-  <link rel="stylesheet" href="styles.css?v=20260704-reserve">
+  <link rel="stylesheet" href="styles.css?v=20260704-drag">
 </head>
 <body>
   <main class="app">
@@ -42,16 +42,20 @@
           <label><input id="show-recapture" type="checkbox" checked> Recaptures</label>
         </div>
         <label>Board theme <select id="board-theme">
-          <option value="classic">Classic green</option>
           <option value="wood">Wood</option>
+          <option value="wood-muted">Muted wood</option>
+          <option value="classic">Classic green</option>
           <option value="blue">Blue</option>
           <option value="gray">Gray</option>
         </select></label>
         <button id="category-toggle" type="button">Filter by categories</button>
         <div id="category-options" class="select-filters hidden">
           <label>Phase <select id="phase-filter"><option value="">All</option></select></label>
+          <label>Exclude phase <select id="phase-exclude-filter"><option value="">None</option></select></label>
           <label>Motif <select id="motif-filter"><option value="">All</option></select></label>
+          <label>Exclude motif <select id="motif-exclude-filter"><option value="">None</option></select></label>
           <label>Length <select id="length-filter"><option value="">All</option></select></label>
+          <label>Exclude length <select id="length-exclude-filter"><option value="">None</option></select></label>
         </div>
       </div>
 
@@ -67,6 +71,6 @@
       </section>
     </aside>
   </main>
-  <script src="app.js?v=20260704-reserve"></script>
+  <script src="app.js?v=20260704-drag"></script>
 </body>
 </html>

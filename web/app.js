@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
   puzzles: [],
   filtered: [],
   index: 0,
@@ -8,6 +8,7 @@ const state = {
   orientation: "w",
   solved: false,
   pendingChoice: null,
+  dragFrom: null,
   showUnmoved: false,
 };
 
@@ -38,8 +39,11 @@ const controls = {
   showCheck: document.getElementById("show-check"),
   showRecapture: document.getElementById("show-recapture"),
   phase: document.getElementById("phase-filter"),
+  phaseExclude: document.getElementById("phase-exclude-filter"),
   motif: document.getElementById("motif-filter"),
+  motifExclude: document.getElementById("motif-exclude-filter"),
   length: document.getElementById("length-filter"),
+  lengthExclude: document.getElementById("length-exclude-filter"),
   categoryToggle: document.getElementById("category-toggle"),
   categoryOptions: document.getElementById("category-options"),
   boardTheme: document.getElementById("board-theme"),
@@ -72,7 +76,7 @@ function bindControls() {
   controls.categoryToggle.addEventListener("click", toggleCategoryFilters);
   controls.boardTheme.addEventListener("change", () => applyBoardTheme(controls.boardTheme.value));
   document.addEventListener("keydown", onKeyDown);
-  for (const input of [controls.showHidden, controls.showCheck, controls.showRecapture, controls.phase, controls.motif, controls.length]) {
+  for (const input of [controls.showHidden, controls.showCheck, controls.showRecapture, controls.phase, controls.phaseExclude, controls.motif, controls.motifExclude, controls.length, controls.lengthExclude]) {
     input.addEventListener("change", applyFilters);
   }
 }
@@ -90,15 +94,21 @@ function enrichPuzzle(puzzle) {
 }
 
 function populateCategoryFilters() {
-  fillSelect(controls.phase, [...new Set(state.puzzles.map((p) => p.categories.phase).filter(Boolean))], ["opening", "middlegame", "endgame"]);
-  fillSelect(controls.motif, [...new Set(state.puzzles.flatMap((p) => p.categories.motifs || []))]);
-  fillSelect(controls.length, [...new Set(state.puzzles.map((p) => p.categories.length).filter(Boolean))], ["one-move", "medium", "long"]);
+  const phases = [...new Set(state.puzzles.map((p) => p.categories.phase).filter(Boolean))];
+  const motifs = [...new Set(state.puzzles.flatMap((p) => p.categories.motifs || []))];
+  const lengths = [...new Set(state.puzzles.map((p) => p.categories.length).filter(Boolean))];
+  fillSelect(controls.phase, phases, ["opening", "middlegame", "endgame"]);
+  fillSelect(controls.phaseExclude, phases, ["opening", "middlegame", "endgame"], "None");
+  fillSelect(controls.motif, motifs);
+  fillSelect(controls.motifExclude, motifs, [], "None");
+  fillSelect(controls.length, lengths, ["one-move", "medium", "long"]);
+  fillSelect(controls.lengthExclude, lengths, ["one-move", "medium", "long"], "None");
 }
 
-function fillSelect(select, values, preferred = []) {
+function fillSelect(select, values, preferred = [], emptyLabel = "All") {
   const current = select.value;
   const ordered = [...preferred.filter((value) => values.includes(value)), ...values.filter((value) => !preferred.includes(value)).sort()];
-  select.innerHTML = '<option value="">All</option>';
+  select.innerHTML = `<option value="">${emptyLabel}</option>`;
   for (const value of ordered) {
     const option = document.createElement("option");
     option.value = value;
@@ -117,8 +127,11 @@ function applyFilters() {
     if (controls.showHidden.checked && !controls.showCheck.checked && tags.has("check-evasion")) return false;
     if (controls.showHidden.checked && !controls.showRecapture.checked && tags.has("trivial-recapture")) return false;
     if (controls.phase.value && puzzle.categories.phase !== controls.phase.value) return false;
+    if (controls.phaseExclude.value && puzzle.categories.phase === controls.phaseExclude.value) return false;
     if (controls.motif.value && !motifs.has(controls.motif.value)) return false;
+    if (controls.motifExclude.value && motifs.has(controls.motifExclude.value)) return false;
     if (controls.length.value && puzzle.categories.length !== controls.length.value) return false;
+    if (controls.lengthExclude.value && puzzle.categories.length === controls.lengthExclude.value) return false;
     return true;
   });
   state.index = Math.min(state.index, Math.max(0, state.filtered.length - 1));
@@ -164,6 +177,7 @@ function resetPuzzle() {
   lineEl.textContent = "";
   detailsEl.textContent = "";
   clearMoveChoices();
+  setBoardFeedback("");
   setStatus("Find the only move.");
   renderBoard();
 }
@@ -214,6 +228,13 @@ function renderBoard() {
       button.dataset.square = square;
       button.addEventListener("click", () => onSquare(square));
       const piece = state.board[square];
+      button.draggable = Boolean(piece) && !state.solved;
+      button.addEventListener("dragstart", (event) => onDragStart(event, square));
+      button.addEventListener("dragover", onDragOver);
+      button.addEventListener("dragenter", (event) => onDragEnter(event, square));
+      button.addEventListener("dragleave", onDragLeave);
+      button.addEventListener("drop", (event) => onDrop(event, square));
+      button.addEventListener("dragend", onDragEnd);
       if (piece) button.appendChild(pieceImage(piece));
       if ((state.orientation === "w" && (file === "a" || rank === 1)) || (state.orientation === "b" && (file === "h" || rank === 8))) {
         const coord = document.createElement("span");
@@ -335,6 +356,55 @@ function pieceImage(piece) {
   return img;
 }
 
+function onDragStart(event, square) {
+  if (state.solved || !state.board[square]) {
+    event.preventDefault();
+    return;
+  }
+  state.dragFrom = square;
+  state.selected = square;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", square);
+  event.currentTarget.classList.add("dragging");
+}
+
+function onDragOver(event) {
+  if (!state.dragFrom || state.solved) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+}
+
+function onDragEnter(event, square) {
+  if (!state.dragFrom || state.solved || state.dragFrom === square) return;
+  event.currentTarget.classList.add("drag-target");
+}
+
+function onDragLeave(event) {
+  event.currentTarget.classList.remove("drag-target");
+}
+
+function onDrop(event, square) {
+  if (!state.dragFrom || state.solved) return;
+  event.preventDefault();
+  event.currentTarget.classList.remove("drag-target");
+  const from = state.dragFrom || event.dataTransfer.getData("text/plain");
+  state.dragFrom = null;
+  state.selected = null;
+  if (!from || from === square) {
+    renderBoard();
+    return;
+  }
+  tryUserMove(from, square);
+}
+
+function onDragEnd(event) {
+  event.currentTarget.classList.remove("dragging");
+  document.querySelectorAll(".drag-target").forEach((square) => square.classList.remove("drag-target"));
+  if (!state.dragFrom) return;
+  state.dragFrom = null;
+  state.selected = null;
+  renderBoard();
+}
 function onSquare(square) {
   if (state.solved) return;
   if (!state.selected) {
@@ -360,6 +430,13 @@ function tryUserMove(from, to) {
 
   const userPrefix = `${from}${to}`;
   if (!moveMatchesPrefix(expected, userPrefix)) {
+    if (!isPseudoLegalMove(from, to)) {
+      setBoardFeedback("");
+      setStatus("Illegal move.");
+      renderBoard();
+      return;
+    }
+    setBoardFeedback("bad");
     setStatus("That is not the tactic move.", "bad");
     renderBoard();
     return;
@@ -380,12 +457,14 @@ function submitUserMove(move) {
   const expected = (puzzle.solution || [])[state.ply];
   clearMoveChoices();
   if (!moveMatchesExpected(move, expected)) {
+    setBoardFeedback("bad");
     setStatus("That is not the tactic move.", "bad");
     renderBoard();
     return;
   }
   applyMove(expected);
   state.ply += 1;
+  setBoardFeedback("");
   setStatus("Correct.", "good");
   renderBoard();
   setTimeout(autoReplies, 250);
@@ -420,6 +499,69 @@ function expectedSuffix(move) {
   return move.length > 4 ? move[4].toLowerCase() : "";
 }
 
+function isPseudoLegalMove(from, to) {
+  const piece = state.board[from];
+  if (!piece || from === to || !isBoardSquare(from) || !isBoardSquare(to)) return false;
+  const target = state.board[to];
+  if (target && sameColor(piece, target)) return false;
+
+  const dx = files.indexOf(to[0]) - files.indexOf(from[0]);
+  const dy = Number(to[1]) - Number(from[1]);
+  const adx = Math.abs(dx);
+  const ady = Math.abs(dy);
+  const role = piece.toUpperCase();
+  const forward = piece === piece.toUpperCase() ? 1 : -1;
+
+  if (isCastleMovePrefix(`${from}${to}`)) return role === "K" || role === "R";
+  if (role === "P") {
+    const startRank = piece === piece.toUpperCase() ? "2" : "7";
+    if (dx === 0 && dy === forward && !target) return true;
+    if (dx === 0 && dy === 2 * forward && from[1] === startRank && !target && !state.board[`${from[0]}${Number(from[1]) + forward}`]) return true;
+    return adx === 1 && dy === forward && Boolean(target) && !sameColor(piece, target);
+  }
+  if (role === "N") return isKnightStep(adx, ady);
+  if (role === "B") return isDiagonal(adx, ady) && isPathClear(from, to);
+  if (role === "R") return isStraight(adx, ady) && isPathClear(from, to);
+  if (role === "Q") return (isStraight(adx, ady) || isDiagonal(adx, ady)) && isPathClear(from, to);
+  if (role === "K") return Math.max(adx, ady) === 1;
+  if (role === "H") return isKnightStep(adx, ady) || (isDiagonal(adx, ady) && isPathClear(from, to));
+  if (role === "E") return isKnightStep(adx, ady) || (isStraight(adx, ady) && isPathClear(from, to));
+  return false;
+}
+
+function isBoardSquare(square) {
+  return /^[a-h][1-8]$/.test(square || "");
+}
+
+function sameColor(a, b) {
+  return (a === a.toUpperCase()) === (b === b.toUpperCase());
+}
+
+function isKnightStep(adx, ady) {
+  return (adx === 1 && ady === 2) || (adx === 2 && ady === 1);
+}
+
+function isStraight(adx, ady) {
+  return (adx === 0) !== (ady === 0);
+}
+
+function isDiagonal(adx, ady) {
+  return adx === ady && adx > 0;
+}
+
+function isPathClear(from, to) {
+  const dx = Math.sign(files.indexOf(to[0]) - files.indexOf(from[0]));
+  const dy = Math.sign(Number(to[1]) - Number(from[1]));
+  let fileIndex = files.indexOf(from[0]) + dx;
+  let rank = Number(from[1]) + dy;
+  while (`${files[fileIndex]}${rank}` !== to) {
+    if (state.board[`${files[fileIndex]}${rank}`]) return false;
+    fileIndex += dx;
+    rank += dy;
+  }
+  return true;
+}
+
 function moveChoices(from, to, expected) {
   const piece = state.board[from];
   const suffix = expectedSuffix(expected);
@@ -446,9 +588,40 @@ function gatingAvailable(from, to, expected) {
   const piece = state.board[from];
   if (!piece) return false;
   if (piece.toUpperCase() === "P" && (to[1] === "1" || to[1] === "8")) return false;
+
+  const fen = currentPuzzle()?.fen || "";
   const color = piece === piece.toUpperCase() ? "w" : "b";
-  if (!pocketHasGatePiece(currentPuzzle()?.fen || "", color)) return false;
-  return isBackRankMove(from, color) || isCastleMovePrefix(`${from}${to}`);
+  if (!pocketHasGatePiece(fen, color)) return false;
+  return gatingOptionSquaresFromFen(fen).has(from) || castleGateOptionMatches(fen, `${from}${to}`);
+}
+
+function gatingOptionSquaresFromFen(fen) {
+  const fields = (fen || "").split(/\s+/);
+  const rights = fields[2] || "";
+  const board = parseFenBoard(fen);
+  const squares = new Set();
+  for (const right of rights) {
+    for (const square of squaresForRight(right)) {
+      const piece = board[square];
+      if (piece && piece.toUpperCase() !== "P") squares.add(square);
+    }
+  }
+  return squares;
+}
+
+function castleGateOptionMatches(fen, prefix) {
+  const optionSquares = gatingOptionSquaresFromFen(fen);
+  const castleSources = {
+    e1g1: ["e1", "h1"],
+    h1e1: ["e1", "h1"],
+    e1c1: ["e1", "a1"],
+    a1e1: ["e1", "a1"],
+    e8g8: ["e8", "h8"],
+    h8e8: ["e8", "h8"],
+    e8c8: ["e8", "a8"],
+    a8e8: ["e8", "a8"],
+  };
+  return (castleSources[prefix] || []).some((square) => optionSquares.has(square));
 }
 
 function pocketHasGatePiece(fen, color) {
@@ -458,9 +631,6 @@ function pocketHasGatePiece(fen, color) {
   return [...pocket].some((piece) => pieces.includes(piece));
 }
 
-function isBackRankMove(from, color) {
-  return color === "w" ? from[1] === "1" : from[1] === "8";
-}
 
 function isCastleMovePrefix(prefix) {
   return ["e1g1", "h1e1", "e1c1", "a1e1", "e8g8", "h8e8", "e8c8", "a8e8"].includes(prefix);
@@ -531,6 +701,7 @@ function autoReplies() {
 
 function markSolved() {
   state.solved = true;
+  setBoardFeedback("good");
   setStatus("Solved.", "good");
   showAnalysisLink();
 }
@@ -653,6 +824,10 @@ function cp(value) {
   return Number.isFinite(value) ? `${value} cp` : "n/a";
 }
 
+function setBoardFeedback(kind) {
+  boardEl.classList.toggle("feedback-good", kind === "good");
+  boardEl.classList.toggle("feedback-bad", kind === "bad");
+}
 function setStatus(text, cls = "") {
   statusEl.textContent = text;
   statusEl.className = `status ${cls}`.trim();
@@ -731,11 +906,17 @@ function toggleCategoryFilters() {
 }
 
 function applySavedBoardTheme() {
-  applyBoardTheme(localStorage.getItem("schess-board-theme") || "classic");
+  const versionKey = "schess-board-theme-default-version";
+  let saved = localStorage.getItem("schess-board-theme");
+  if (localStorage.getItem(versionKey) !== "wood-default" && (!saved || saved === "classic")) {
+    saved = "wood";
+    localStorage.setItem(versionKey, "wood-default");
+  }
+  applyBoardTheme(saved || "wood");
 }
 
 function applyBoardTheme(theme) {
-  const selected = ["classic", "wood", "blue", "gray"].includes(theme) ? theme : "classic";
+  const selected = ["wood", "wood-muted", "classic", "blue", "gray"].includes(theme) ? theme : "wood";
   document.body.dataset.boardTheme = selected;
   if (controls.boardTheme) controls.boardTheme.value = selected;
   localStorage.setItem("schess-board-theme", selected);

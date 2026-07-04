@@ -1,9 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+import time
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -51,12 +52,21 @@ class SelectionConfig:
     losing_cp: int = -150
     min_gap_cp: int = 150
     max_plies: int = 7
+    extension_beam_width: int = 1
     extend_critical: bool = False
     prefer_quiet_replies: bool = True
     eval_cache_dir: Path | None = None
     skip_standard_positions: bool = True
     confirm_depth: int | None = None
     confirm_multipv: int | None = None
+    confirm_fast_depth: int | None = None
+    confirm_clear_gap_cp: int = 300
+    confirm_clear_margin_cp: int = 300
+    confirm_borderline_depth: int | None = None
+    confirm_borderline_win_cp: int | None = None
+    confirm_borderline_gap_cp: int | None = None
+    profile_jsonl: Path | None = None
+    eval_context: str = "root"
 
 
 def positions_from_pgn(path: Path, configured_variant: str = "seirawan") -> list[PositionRecord]:
@@ -102,7 +112,8 @@ def select_tactics(
             if selection is None:
                 continue
             if config.extend_critical:
-                selection = extend_selection(selection, engine, config)
+                extension_config = replace(config, eval_context="extension")
+                selection = extend_selection(selection, engine, extension_config)
             motif = (_canonical_fen(position.fen), selection.kind, selection.best.move)
             if motif in seen_motifs:
                 continue
@@ -113,16 +124,28 @@ def select_tactics(
 
 
 def evaluate_position(position: PositionRecord, engine, config: SelectionConfig) -> list[MoveEval]:
+    started = time.perf_counter()
+    legal_count = len(pyffish.legal_moves(position.variant, position.fen, []))
     cached = _read_eval_cache(position, config)
     if cached is not None:
+        _profile_event(
+            config,
+            "engine_eval",
+            position,
+            started,
+            legal_count=legal_count,
+            cache_hit=True,
+            result_count=len(cached),
+        )
         return cached
 
     engine.setoption("UCI_Variant", position.variant)
-    engine.setoption("multipv", min(config.multipv, len(pyffish.legal_moves(position.variant, position.fen, []))))
+    engine.setoption("multipv", min(config.multipv, legal_count))
     engine.newgame()
     engine.position(position.fen, [])
     _, info = engine.go(depth=config.depth)
     if not info:
+        _profile_event(config, "engine_eval", position, started, legal_count=legal_count, cache_hit=False, result_count=0)
         return []
 
     evals: list[MoveEval] = []
@@ -139,8 +162,8 @@ def evaluate_position(position: PositionRecord, engine, config: SelectionConfig)
             )
         )
     _write_eval_cache(position, config, evals)
+    _profile_event(config, "engine_eval", position, started, legal_count=legal_count, cache_hit=False, result_count=len(evals))
     return evals
-
 
 def evaluate_fen(variant: str, fen: str, engine, config: SelectionConfig) -> list[MoveEval]:
     record = PositionRecord(
@@ -160,60 +183,183 @@ def confirm_selection(selection: Selection, engine, config: SelectionConfig) -> 
     if not config.confirm_depth or config.confirm_depth <= config.depth:
         return selection
 
-    confirm_config = SelectionConfig(
-        depth=config.confirm_depth,
+    depths: list[tuple[int, bool]] = []
+    if config.confirm_fast_depth and config.depth < config.confirm_fast_depth < config.confirm_depth:
+        depths.append((config.confirm_fast_depth, True))
+    depths.append((config.confirm_depth, False))
+
+    last_evals: list[MoveEval] = []
+    for depth, fast_pass in depths:
+        confirm_config = _confirm_config(config, depth)
+        last_evals = evaluate_position(selection.position, engine, confirm_config)
+        confirmed = classify_position(selection.position, last_evals, confirm_config)
+        if confirmed is None or confirmed.kind != selection.kind or confirmed.best.move != selection.best.move:
+            if fast_pass:
+                continue
+            break
+        if fast_pass:
+            if _clear_confirmation(confirmed, confirm_config):
+                return _confirmed_selection(selection, confirmed, f"confirmed at depth {depth} (clear)")
+            continue
+        if _needs_borderline_confirmation(confirmed, config):
+            deeper = _borderline_confirmation(selection, engine, config, last_evals)
+            if deeper is None:
+                return None
+            return _confirmed_selection(selection, deeper, f"confirmed at depth {config.confirm_borderline_depth} (borderline)")
+        return _confirmed_selection(selection, confirmed, f"confirmed at depth {depth}")
+
+    if config.confirm_borderline_depth and config.confirm_borderline_depth > config.confirm_depth:
+        deeper = _borderline_confirmation(selection, engine, config, last_evals)
+        if deeper is not None:
+            return _confirmed_selection(selection, deeper, f"confirmed at depth {config.confirm_borderline_depth} (borderline)")
+    return None
+
+
+def _confirm_config(config: SelectionConfig, depth: int) -> SelectionConfig:
+    return SelectionConfig(
+        depth=depth,
         multipv=config.confirm_multipv or config.multipv,
         win_cp=config.win_cp,
         draw_floor_cp=config.draw_floor_cp,
         losing_cp=config.losing_cp,
         min_gap_cp=config.min_gap_cp,
         max_plies=config.max_plies,
+        extension_beam_width=config.extension_beam_width,
         extend_critical=False,
         prefer_quiet_replies=config.prefer_quiet_replies,
         eval_cache_dir=config.eval_cache_dir,
         skip_standard_positions=config.skip_standard_positions,
         confirm_depth=None,
         confirm_multipv=None,
+        confirm_fast_depth=None,
+        confirm_clear_gap_cp=config.confirm_clear_gap_cp,
+        confirm_clear_margin_cp=config.confirm_clear_margin_cp,
+        confirm_borderline_depth=None,
+        confirm_borderline_win_cp=config.confirm_borderline_win_cp,
+        confirm_borderline_gap_cp=config.confirm_borderline_gap_cp,
+        profile_jsonl=config.profile_jsonl,
+        eval_context="confirm",
     )
-    confirmed = classify_position(selection.position, evaluate_position(selection.position, engine, confirm_config), confirm_config)
-    if confirmed is None or confirmed.kind != selection.kind or confirmed.best.move != selection.best.move:
-        return None
+
+
+def _borderline_config(config: SelectionConfig) -> SelectionConfig:
+    depth = config.confirm_borderline_depth or config.confirm_depth or config.depth
+    confirm_config = _confirm_config(config, depth)
+    return replace(
+        confirm_config,
+        win_cp=config.confirm_borderline_win_cp or config.win_cp,
+        min_gap_cp=config.confirm_borderline_gap_cp or config.min_gap_cp,
+        eval_context="confirm_borderline",
+    )
+
+
+def _confirmed_selection(selection: Selection, confirmed: Selection, confirmation: str) -> Selection:
     return Selection(
         selection.position,
         confirmed.kind,
         confirmed.best,
         confirmed.second,
-        f"{selection.reason}; confirmed at depth {config.confirm_depth}",
+        f"{selection.reason}; {confirmation}",
         selection.flags,
     )
 
 
+def _clear_confirmation(selection: Selection, config: SelectionConfig) -> bool:
+    if selection.second is None:
+        return True
+    gap = selection.best.score_cp - selection.second.score_cp
+    if gap < config.confirm_clear_gap_cp:
+        return False
+    margin = config.confirm_clear_margin_cp
+    if selection.kind == "winning":
+        return selection.best.score_cp >= config.win_cp + margin and selection.second.score_cp < config.win_cp
+    if selection.kind == "drawing":
+        return selection.best.score_cp >= config.draw_floor_cp and selection.second.score_cp <= config.losing_cp - margin
+    return False
+
+
+def _needs_borderline_confirmation(selection: Selection, config: SelectionConfig) -> bool:
+    if not config.confirm_borderline_depth or config.confirm_borderline_depth <= (config.confirm_depth or 0):
+        return False
+    if selection.second is None:
+        return False
+    gap = selection.best.score_cp - selection.second.score_cp
+    if selection.kind == "winning":
+        return selection.best.score_cp < config.win_cp + config.confirm_clear_margin_cp or gap < config.confirm_clear_gap_cp
+    if selection.kind == "drawing":
+        return selection.best.score_cp < config.draw_floor_cp + config.confirm_clear_margin_cp or gap < config.confirm_clear_gap_cp
+    return False
+
+
+def _borderline_confirmation(
+    selection: Selection,
+    engine,
+    config: SelectionConfig,
+    previous_evals: list[MoveEval],
+) -> Selection | None:
+    relaxed_config = _borderline_config(config)
+    if previous_evals:
+        relaxed_previous = classify_position(selection.position, previous_evals, relaxed_config)
+        if relaxed_previous is None or relaxed_previous.kind != selection.kind or relaxed_previous.best.move != selection.best.move:
+            return None
+    confirmed = classify_position(selection.position, evaluate_position(selection.position, engine, relaxed_config), relaxed_config)
+    if confirmed is None or confirmed.kind != selection.kind or confirmed.best.move != selection.best.move:
+        return None
+    return confirmed
+
 def extend_selection(selection: Selection, engine, config: SelectionConfig) -> Selection:
-    line = [selection.best.move]
-    if len(line) >= config.max_plies:
+    beam_width = max(1, config.extension_beam_width)
+    initial_line = [selection.best.move]
+    if len(initial_line) >= config.max_plies:
         return selection
 
     variant = selection.position.variant
-    current_fen = pyffish.get_fen(variant, selection.position.fen, [selection.best.move])
-    while len(line) + 2 <= config.max_plies:
-        reply = find_forcing_reply(variant, current_fen, selection.kind, engine, config)
-        if reply is None:
+    initial_fen = pyffish.get_fen(variant, selection.position.fen, initial_line)
+    beam: list[tuple[list[str], str, int, int]] = [(initial_line, initial_fen, 0, selection.best.score_cp)]
+    best_line = initial_line
+    best_rank = _extension_rank(best_line, 0, selection.best.score_cp)
+
+    while True:
+        next_beam: list[tuple[list[str], str, int, int]] = []
+        for line, current_fen, check_penalty_sum, score_sum in beam:
+            if len(line) + 2 > config.max_plies:
+                continue
+            for check_penalty, opponent_move, solver_move in find_forcing_replies(variant, current_fen, selection.kind, engine, config, beam_width):
+                new_line = [*line, opponent_move, solver_move.move]
+                new_fen = pyffish.get_fen(variant, current_fen, [opponent_move, solver_move.move])
+                next_beam.append(
+                    (
+                        new_line,
+                        new_fen,
+                        check_penalty_sum + check_penalty,
+                        score_sum + solver_move.score_cp,
+                    )
+                )
+
+        if not next_beam:
             break
 
-        opponent_move, solver_move = reply
-        line.extend([opponent_move, solver_move.move])
-        current_fen = pyffish.get_fen(variant, current_fen, [opponent_move, solver_move.move])
+        next_beam.sort(key=lambda item: _extension_rank(item[0], item[2], item[3]))
+        beam = next_beam[:beam_width]
+        current_rank = _extension_rank(beam[0][0], beam[0][2], beam[0][3])
+        if current_rank < best_rank:
+            best_line = beam[0][0]
+            best_rank = current_rank
 
-    if line == selection.best.pv:
+    if best_line == selection.best.pv:
         return selection
     return Selection(
         selection.position,
         selection.kind,
-        MoveEval(selection.best.move, selection.best.san, selection.best.score_cp, line),
+        MoveEval(selection.best.move, selection.best.san, selection.best.score_cp, best_line),
         selection.second,
         selection.reason,
         selection.flags,
     )
+
+
+def _extension_rank(line: list[str], check_penalty_sum: int, score_sum: int) -> tuple[int, int, int]:
+    return (-len(line), check_penalty_sum, -score_sum)
 
 
 def find_forcing_reply(
@@ -223,10 +369,30 @@ def find_forcing_reply(
     engine,
     config: SelectionConfig,
 ) -> tuple[str, MoveEval] | None:
+    replies = find_forcing_replies(variant, fen, kind, engine, config, 1)
+    if not replies:
+        return None
+    _, reply, solver_move = replies[0]
+    return reply, solver_move
+
+
+def find_forcing_replies(
+    variant: str,
+    fen: str,
+    kind: str,
+    engine,
+    config: SelectionConfig,
+    limit: int | None = None,
+) -> list[tuple[int, str, MoveEval]]:
+    started = time.perf_counter()
+    legal_replies = pyffish.legal_moves(variant, fen, [])
     candidates: list[tuple[int, int, str, MoveEval]] = []
-    for reply in pyffish.legal_moves(variant, fen, []):
+    evaluated_replies = 0
+    skipped_standard = 0
+    for reply in legal_replies:
         child_fen = pyffish.get_fen(variant, fen, [reply])
         if config.skip_standard_positions and not _has_schess_material(child_fen):
+            skipped_standard += 1
             continue
         child_position = PositionRecord(
             ply=0,
@@ -238,6 +404,7 @@ def find_forcing_reply(
             previous_move=pyffish.get_san_moves(variant, fen, [reply])[-1],
             previous_uci=reply,
         )
+        evaluated_replies += 1
         child_evals = evaluate_position(child_position, engine, config)
         child_selection = classify_position(child_position, child_evals, config)
         if child_selection and child_selection.kind == kind:
@@ -245,13 +412,25 @@ def find_forcing_reply(
             check_penalty = gives_check if config.prefer_quiet_replies else 0
             candidates.append((check_penalty, child_selection.best.score_cp, reply, child_selection.best))
 
+    _profile_event(
+        config,
+        "extension_reply_scan",
+        None,
+        started,
+        fen=fen,
+        legal_count=len(legal_replies),
+        evaluated_replies=evaluated_replies,
+        skipped_standard=skipped_standard,
+        candidate_replies=len(candidates),
+        beam_limit=limit or 0,
+    )
+
     if not candidates:
-        return None
+        return []
 
-    candidates.sort(key=lambda item: item[0])
-    _, _, reply, solver_move = candidates[0]
-    return reply, solver_move
-
+    candidates.sort(key=lambda item: (item[0], -item[1]))
+    selected = candidates[: max(1, limit or len(candidates))]
+    return [(check_penalty, reply, solver_move) for check_penalty, _, reply, solver_move in selected]
 
 def classify_position(
     position: PositionRecord,
@@ -337,6 +516,32 @@ def _score_to_cp(score: list[str]) -> int:
         return 100000 - value
     return -100000 - value
 
+
+
+def _profile_event(config: SelectionConfig, event: str, position: PositionRecord | None, started: float, **extra) -> None:
+    if config.profile_jsonl is None:
+        return
+    payload = {
+        "event": event,
+        "context": config.eval_context,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+        "depth": config.depth,
+        "multipv": config.multipv,
+        **extra,
+    }
+    if position is not None:
+        payload.update(
+            {
+                "fen": position.fen,
+                "move_number": position.move_number,
+                "side": position.side,
+                "ply": position.ply,
+                "source": position.site,
+            }
+        )
+    config.profile_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    with config.profile_jsonl.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 def _read_eval_cache(position: PositionRecord, config: SelectionConfig) -> list[MoveEval] | None:
     path = _eval_cache_path(position, config)

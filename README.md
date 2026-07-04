@@ -1,6 +1,10 @@
-# S-Chess Puzzle Generator
+﻿# S-Chess Puzzle Generator
 
 Local-first tooling for generating and solving Seirawan chess / S-Chess tactics.
+
+## Maintainer Command Cheat Sheet
+
+Day-to-day generation, review, and publish commands live in [PRIVATE_COMMANDS.md](PRIVATE_COMMANDS.md). Start there when expanding the puzzle set; the rest of this README is the public project overview.
 
 The project is designed as an orchestration layer around
 [`chess-variant-puzzler`](https://github.com/ianfab/chess-variant-puzzler), Fairy-Stockfish,
@@ -227,7 +231,7 @@ python -m schess_puzzles.cli selfplay --games 20 --output-dir data\raw\selfplay_
 The output is normal Seirawan PGN and can be fed into the same selector:
 
 ```powershell
-python -m schess_puzzles.cli select-batch --glob "data/raw/selfplay/*.pgn" --limit 20 --depth 10 --multipv 6 --extend-critical --max-plies 5 --output-jsonl data\puzzles\selfplay_batch01.jsonl --report-jsonl data\puzzles\selfplay_batch01_report.jsonl
+python -m schess_puzzles.cli select-batch --glob "data/raw/selfplay/*.pgn" --limit 20 --depth 10 --multipv 6 --extend-critical --max-plies 7 --extension-beam-width 2 --output-jsonl data\puzzles\selfplay_batch01.jsonl --report-jsonl data\puzzles\selfplay_batch01_report.jsonl
 python -m schess_puzzles.cli review-html data\puzzles\selfplay_batch01_report.jsonl data\puzzles\selfplay_batch01_review.html
 ```
 
@@ -296,12 +300,10 @@ For batch generation, keep the first pass shallow enough to be efficient and
 confirm only the candidate tactics at higher depth:
 
 ```powershell
-python -m schess_puzzles.cli select-batch --depth 10 --multipv 6 --confirm-depth 20 --confirm-multipv 6 --extend-critical --max-plies 5
+python -m schess_puzzles.cli select-batch --depth 10 --multipv 6 --confirm-depth 20 --confirm-multipv 3 --confirm-fast-depth 17 --extend-critical --max-plies 7 --extension-beam-width 2
 ```
 
-The PowerShell batch helper uses this two-stage setup by default. If a candidate
-does not remain the same tactic with the same best move at the confirmation
-depth, it is dropped.
+The PowerShell batch helpers use this setup by default: clear candidates can be accepted at depth 17, all other routine candidates are confirmed at depth 20, `confirm-multipv=3` is used for speed, and critical continuations use a small beam (`extension-beam-width=2`) up to 7 plies. Depth 22 is reserved for manual borderline candidates, where spending extra time is worthwhile. If a candidate does not remain the same tactic with the same best move at the confirmation depth, it is dropped.
 
 One-move recaptures are detected as `recapture` flags. They can be kept for pure
 evaluation debugging or removed for puzzle quality:
@@ -320,13 +322,37 @@ force another only move for the solver side:
 python -m schess_puzzles.cli select pychess-variants_0bQHMZ37 --extend-critical
 ```
 
-This mirrors the common standard-chess puzzle approach: an opponent reply may be
+With `--extension-beam-width 2` or higher, the selector temporarily keeps several forcing opponent replies and only chooses the final line after trying to extend them. This mirrors the common standard-chess puzzle approach: an opponent reply may be
 chosen because it creates the next only move, even if that reply was not played
 in the game. The selector prefers quiet forcing replies over checking replies by
 default, because otherwise many lines are extended by obvious bad checks.
 
 Use `--allow-check-reply-first` to disable that preference.
 
+## Runtime Profiling
+
+`select-batch`, `suggest-fen`, and `chesscom-next-tactics` accept `--profile-jsonl`. The selector writes JSONL timing events for root searches, high-depth confirmation, and extension scans. Summarize them with:
+
+```powershell
+python tools\summarize_profile.py data\profiles\selfplay_batch*_selector.jsonl
+```
+
+Self-play growth can run independent batches in parallel:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\Grow-SelfPlayToTarget.ps1 -TargetVisible 500 -Workers 4 -Profile
+```
+
+Each worker uses a separate raw directory, report file, eval-cache directory, and optional profile file. The combined reports and website export are updated after each worker wave.
+## Puzzle Quality Metadata
+
+Reports are enriched during `refresh-report-flags`, `combine-reports`, and `export-web` without rerunning the engine. Each tactic record keeps:
+
+- `material`: side-relative material before the move, after the first move, after the full line, and both material swings.
+- `quality`: eval gap, line length in plies, a first-pass confidence score, and a `low` / `medium` / `high` bucket.
+- `dedupe`: stable exact and family keys for later duplicate or near-duplicate curation.
+
+These fields are intentionally descriptive first. They should be inspected against hand-reviewed puzzles before they become hard filters.
 ## Static Puzzle Website
 
 The public-facing puzzle viewer is designed as a static site. Python remains the
@@ -404,5 +430,3 @@ python -m schess_puzzles.cli solve data/puzzles/puzzles.jsonl
 
 The scaffold is intentionally conservative: source fetchers can be expanded per
 site once the exact endpoints and account requirements are known.
-
-

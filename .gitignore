@@ -1,4 +1,5 @@
-# Local configuration and credentials
+﻿# Local configuration and credentials
+PRIVATE_COMMANDS.md
 config.toml
 cookies_env.txt
 cookie_raw.txt
@@ -12,6 +13,7 @@ access_token.txt
 /data/cache/
 /data/positions/
 /data/puzzles/
+/data/profiles/
 /logs/
 
 # Local dependency checkouts and virtualenvs

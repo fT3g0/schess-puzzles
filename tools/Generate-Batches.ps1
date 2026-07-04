@@ -1,4 +1,4 @@
-param(
+﻿param(
     [int]$ChessComStartBatch = 50,
     [int]$ChessComBatches = 0,
     [int]$ChessComBatchSize = 20,
@@ -8,8 +8,10 @@ param(
     [int]$SelectorDepth = 10,
     [int]$MultiPv = 6,
     [int]$ConfirmDepth = 20,
-    [int]$ConfirmMultiPv = 6,
-    [int]$LineMaxPlies = 5,
+    [int]$ConfirmMultiPv = 3,
+    [int]$ConfirmFastDepth = 17,
+    [int]$LineMaxPlies = 7,
+    [int]$ExtensionBeamWidth = 2,
     [int]$SelfPlayDepth = 1,
     [int]$SelfPlayMaxPlies = 120,
     [int]$TemperatureCp = 250,
@@ -48,8 +50,10 @@ for ($offset = 0; $offset -lt $ChessComBatches; $offset++) {
         "--multipv", "$MultiPv",
         "--confirm-depth", "$ConfirmDepth",
         "--confirm-multipv", "$ConfirmMultiPv",
+        "--confirm-fast-depth", "$ConfirmFastDepth",
         "--extend-critical",
         "--max-plies", "$LineMaxPlies",
+        "--extension-beam-width", "$ExtensionBeamWidth",
         "--output-jsonl", $jsonl,
         "--report-jsonl", $report
     )
@@ -88,8 +92,10 @@ for ($offset = 0; $offset -lt $SelfPlayBatches; $offset++) {
         "--multipv", "$MultiPv",
         "--confirm-depth", "$ConfirmDepth",
         "--confirm-multipv", "$ConfirmMultiPv",
+        "--confirm-fast-depth", "$ConfirmFastDepth",
         "--extend-critical",
         "--max-plies", "$LineMaxPlies",
+        "--extension-beam-width", "$ExtensionBeamWidth",
         "--output-jsonl", $jsonl,
         "--report-jsonl", $report
     )

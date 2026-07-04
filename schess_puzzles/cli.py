@@ -1,7 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import shutil
@@ -72,6 +73,8 @@ def main() -> None:
 
     fetch_chesscom_archive = subparsers.add_parser("fetch-chesscom-archive")
     fetch_chesscom_archive.add_argument("--config", default="config.toml")
+    fetch_chesscom_archive.add_argument("--access-token-file", type=Path, default=Path("access_token.txt"))
+    fetch_chesscom_archive.add_argument("--auth-user-id", type=int)
     fetch_chesscom_archive.add_argument("--cookie")
     fetch_chesscom_archive.add_argument("--player-id", type=int)
     fetch_chesscom_archive.add_argument("--username")
@@ -122,10 +125,18 @@ def main() -> None:
     chesscom_next.add_argument("--depth", type=int, default=10)
     chesscom_next.add_argument("--multipv", type=int, default=6)
     chesscom_next.add_argument("--confirm-depth", type=int, default=20)
-    chesscom_next.add_argument("--confirm-multipv", type=int, default=6)
-    chesscom_next.add_argument("--max-plies", type=int, default=5)
+    chesscom_next.add_argument("--confirm-multipv", type=int, default=3)
+    chesscom_next.add_argument("--confirm-fast-depth", type=int, default=17)
+    chesscom_next.add_argument("--confirm-clear-gap-cp", type=int, default=300)
+    chesscom_next.add_argument("--confirm-clear-margin-cp", type=int, default=300)
+    chesscom_next.add_argument("--confirm-borderline-depth", type=int)
+    chesscom_next.add_argument("--confirm-borderline-win-cp", type=int)
+    chesscom_next.add_argument("--confirm-borderline-gap-cp", type=int)
+    chesscom_next.add_argument("--max-plies", type=int, default=7)
+    chesscom_next.add_argument("--extension-beam-width", type=int, default=2)
     chesscom_next.add_argument("--eval-cache-dir", type=Path, default=Path("data/cache/evals"))
     chesscom_next.add_argument("--no-update-public", action="store_true")
+    chesscom_next.add_argument("--profile-jsonl", type=Path)
     chesscom_next.add_argument("--debug-socket", action="store_true")
     inspect_sources = subparsers.add_parser("inspect-sources")
     inspect_sources.add_argument("files", nargs="+", type=Path)
@@ -158,6 +169,12 @@ def main() -> None:
     select.add_argument("--multipv", type=int, default=8)
     select.add_argument("--confirm-depth", type=int)
     select.add_argument("--confirm-multipv", type=int)
+    select.add_argument("--confirm-fast-depth", type=int)
+    select.add_argument("--confirm-clear-gap-cp", type=int, default=300)
+    select.add_argument("--confirm-clear-margin-cp", type=int, default=300)
+    select.add_argument("--confirm-borderline-depth", type=int)
+    select.add_argument("--confirm-borderline-win-cp", type=int)
+    select.add_argument("--confirm-borderline-gap-cp", type=int)
     select.add_argument("--win-cp", type=int, default=200)
     select.add_argument("--draw-floor-cp", type=int, default=-80)
     select.add_argument("--losing-cp", type=int, default=-150)
@@ -165,6 +182,7 @@ def main() -> None:
     select.add_argument("--exclude-recaptures", action="store_true")
     select.add_argument("--extend-critical", action="store_true")
     select.add_argument("--max-plies", type=int, default=7)
+    select.add_argument("--extension-beam-width", type=int, default=1)
     select.add_argument("--allow-check-reply-first", action="store_true")
     select.add_argument("--include-standard-positions", action="store_true")
     select.add_argument("--output-jsonl", type=Path)
@@ -180,18 +198,26 @@ def main() -> None:
     select_batch.add_argument("--multipv", type=int, default=6)
     select_batch.add_argument("--confirm-depth", type=int)
     select_batch.add_argument("--confirm-multipv", type=int)
+    select_batch.add_argument("--confirm-fast-depth", type=int)
+    select_batch.add_argument("--confirm-clear-gap-cp", type=int, default=300)
+    select_batch.add_argument("--confirm-clear-margin-cp", type=int, default=300)
+    select_batch.add_argument("--confirm-borderline-depth", type=int)
+    select_batch.add_argument("--confirm-borderline-win-cp", type=int)
+    select_batch.add_argument("--confirm-borderline-gap-cp", type=int)
     select_batch.add_argument("--win-cp", type=int, default=200)
     select_batch.add_argument("--draw-floor-cp", type=int, default=-80)
     select_batch.add_argument("--losing-cp", type=int, default=-150)
     select_batch.add_argument("--min-gap-cp", type=int, default=150)
     select_batch.add_argument("--exclude-recaptures", action="store_true")
     select_batch.add_argument("--extend-critical", action="store_true")
-    select_batch.add_argument("--max-plies", type=int, default=5)
+    select_batch.add_argument("--max-plies", type=int, default=7)
+    select_batch.add_argument("--extension-beam-width", type=int, default=2)
     select_batch.add_argument("--allow-check-reply-first", action="store_true")
     select_batch.add_argument("--include-standard-positions", action="store_true")
     select_batch.add_argument("--output-jsonl", type=Path, default=Path("data/puzzles/chesscom_batch20.jsonl"))
     select_batch.add_argument("--report-jsonl", type=Path, default=Path("data/puzzles/chesscom_batch20_report.jsonl"))
     select_batch.add_argument("--eval-cache-dir", type=Path, default=Path("data/cache/evals"))
+    select_batch.add_argument("--profile-jsonl", type=Path)
 
 
     suggest_fen = subparsers.add_parser("suggest-fen")
@@ -199,17 +225,21 @@ def main() -> None:
     suggest_fen.add_argument("--config", default="config.toml")
     suggest_fen.add_argument("--depth", type=int, default=20)
     suggest_fen.add_argument("--multipv", type=int, default=8)
+    suggest_fen.add_argument("--extend-depth", type=int, default=12)
+    suggest_fen.add_argument("--extend-multipv", type=int)
     suggest_fen.add_argument("--win-cp", type=int, default=200)
     suggest_fen.add_argument("--draw-floor-cp", type=int, default=-80)
     suggest_fen.add_argument("--losing-cp", type=int, default=-150)
     suggest_fen.add_argument("--min-gap-cp", type=int, default=150)
-    suggest_fen.add_argument("--max-plies", type=int, default=5)
+    suggest_fen.add_argument("--max-plies", type=int, default=7)
+    suggest_fen.add_argument("--extension-beam-width", type=int, default=2)
     suggest_fen.add_argument("--allow-check-reply-first", action="store_true")
     suggest_fen.add_argument("--include-standard-positions", action="store_true")
     suggest_fen.add_argument("--source", default="suggested")
     suggest_fen.add_argument("--output-jsonl", type=Path, default=Path("data/puzzles/suggested.jsonl"))
     suggest_fen.add_argument("--report-jsonl", type=Path, default=Path("data/puzzles/suggested_report.jsonl"))
     suggest_fen.add_argument("--eval-cache-dir", type=Path, default=Path("data/cache/evals"))
+    suggest_fen.add_argument("--profile-jsonl", type=Path)
     export_web = subparsers.add_parser("export-web")
     export_web.add_argument("report_jsonl", type=Path, nargs="?", default=Path("data/puzzles/all_report.jsonl"))
     export_web.add_argument("output_json", type=Path, nargs="?", default=Path("web/public/puzzles.json"))
@@ -220,6 +250,18 @@ def main() -> None:
     refresh_report_flags = subparsers.add_parser("refresh-report-flags")
     refresh_report_flags.add_argument("input_report", type=Path)
     refresh_report_flags.add_argument("output_report", type=Path, nargs="?")
+
+    reextend_report = subparsers.add_parser("reextend-report")
+    reextend_report.add_argument("files", nargs="*", type=Path)
+    reextend_report.add_argument("--config", default="config.toml")
+    reextend_report.add_argument("--glob", action="append", default=[])
+    reextend_report.add_argument("--line-plies", type=int, default=5)
+    reextend_report.add_argument("--max-plies", type=int, default=7)
+    reextend_report.add_argument("--depth", type=int, default=10)
+    reextend_report.add_argument("--multipv", type=int, default=6)
+    reextend_report.add_argument("--extension-beam-width", type=int, default=2)
+    reextend_report.add_argument("--eval-cache-dir", type=Path, default=Path("data/cache/evals/reextend"))
+    reextend_report.add_argument("--profile-jsonl", type=Path)
 
     combine_reports = subparsers.add_parser("combine-reports")
     combine_reports.add_argument("reports", nargs="*", type=Path)
@@ -292,6 +334,8 @@ def main() -> None:
         _export_web(args.report_jsonl, args.output_json)
     elif args.command == "refresh-report-flags":
         _refresh_report_flags(args.input_report, args.output_report)
+    elif args.command == "reextend-report":
+        _reextend_report(Path(args.config), args)
     elif args.command == "combine-reports":
         _combine_reports(args.reports, args.glob, args.output)
     elif args.command == "selfplay":
@@ -443,9 +487,7 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
 
     config = load_config(config_path)
     settings = config.raw.get("sources", {}).get("chess_com", {})
-    cookie = args.cookie or __import__("os").getenv("CHESSCOM_COOKIE")
-    if not cookie:
-        raise SystemExit("Set CHESSCOM_COOKIE or pass --cookie for authenticated chess.com archive fetch.")
+    cookie, auth_user_id = _chesscom_auth(args)
 
     client = ChessComClient(settings.get("base_url", "https://api.chess.com/pub"))
     try:
@@ -461,6 +503,7 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
             limit_pages=args.pages,
             archive_timeout=args.archive_timeout,
             debug=args.debug_socket,
+            auth_user_id=auth_user_id,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
@@ -476,7 +519,7 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
             print(f"[{index}/{len(game_ids)}] skip existing {target}")
             continue
         try:
-            result = client.download_variant_pgn4(game_id, config.paths.raw_games, cookie=cookie)
+            result = client.download_variant_pgn4(game_id, config.paths.raw_games, cookie=cookie, auth_user_id=auth_user_id)
         except Exception as exc:
             failed += 1
             print(f"[{index}/{len(game_ids)}] failed {game_id}: {exc}")
@@ -679,6 +722,12 @@ def _chesscom_next_tactics(config_path: Path, args: argparse.Namespace) -> None:
             multipv=args.multipv,
             confirm_depth=args.confirm_depth,
             confirm_multipv=args.confirm_multipv,
+            confirm_fast_depth=args.confirm_fast_depth,
+            confirm_clear_gap_cp=args.confirm_clear_gap_cp,
+            confirm_clear_margin_cp=args.confirm_clear_margin_cp,
+            confirm_borderline_depth=args.confirm_borderline_depth,
+            confirm_borderline_win_cp=args.confirm_borderline_win_cp,
+            confirm_borderline_gap_cp=args.confirm_borderline_gap_cp,
             win_cp=200,
             draw_floor_cp=-80,
             losing_cp=-150,
@@ -686,11 +735,13 @@ def _chesscom_next_tactics(config_path: Path, args: argparse.Namespace) -> None:
             exclude_recaptures=False,
             extend_critical=True,
             max_plies=args.max_plies,
+            extension_beam_width=args.extension_beam_width,
             allow_check_reply_first=False,
             include_standard_positions=False,
             output_jsonl=jsonl,
             report_jsonl=report,
             eval_cache_dir=args.eval_cache_dir,
+            profile_jsonl=args.profile_jsonl,
         ),
     )
     _refresh_report_flags(report, None)
@@ -885,12 +936,19 @@ def _select(config_path: Path, input_path: Path, args: argparse.Namespace) -> No
         losing_cp=args.losing_cp,
         min_gap_cp=args.min_gap_cp,
         max_plies=args.max_plies,
+        extension_beam_width=getattr(args, "extension_beam_width", 1),
         extend_critical=args.extend_critical,
         prefer_quiet_replies=not args.allow_check_reply_first,
         eval_cache_dir=args.eval_cache_dir,
         skip_standard_positions=not args.include_standard_positions,
         confirm_depth=args.confirm_depth,
         confirm_multipv=args.confirm_multipv,
+        confirm_fast_depth=getattr(args, "confirm_fast_depth", None),
+        confirm_clear_gap_cp=getattr(args, "confirm_clear_gap_cp", 300),
+        confirm_clear_margin_cp=getattr(args, "confirm_clear_margin_cp", 300),
+        confirm_borderline_depth=getattr(args, "confirm_borderline_depth", None),
+        confirm_borderline_win_cp=getattr(args, "confirm_borderline_win_cp", None),
+        confirm_borderline_gap_cp=getattr(args, "confirm_borderline_gap_cp", None),
     )
     uci_path = config.paths.variant_puzzler / "uci.py"
     selections = select_tactics(
@@ -938,12 +996,20 @@ def _select_batch(config_path: Path, args: argparse.Namespace) -> None:
         losing_cp=args.losing_cp,
         min_gap_cp=args.min_gap_cp,
         max_plies=args.max_plies,
+        extension_beam_width=getattr(args, "extension_beam_width", 1),
         extend_critical=args.extend_critical,
         prefer_quiet_replies=not args.allow_check_reply_first,
         eval_cache_dir=args.eval_cache_dir,
         skip_standard_positions=not args.include_standard_positions,
         confirm_depth=args.confirm_depth,
         confirm_multipv=args.confirm_multipv,
+        confirm_fast_depth=getattr(args, "confirm_fast_depth", None),
+        confirm_clear_gap_cp=getattr(args, "confirm_clear_gap_cp", 300),
+        confirm_clear_margin_cp=getattr(args, "confirm_clear_margin_cp", 300),
+        confirm_borderline_depth=getattr(args, "confirm_borderline_depth", None),
+        confirm_borderline_win_cp=getattr(args, "confirm_borderline_win_cp", None),
+        confirm_borderline_gap_cp=getattr(args, "confirm_borderline_gap_cp", None),
+        profile_jsonl=args.profile_jsonl,
     )
 
     files = args.files or sorted(Path().glob(args.glob))
@@ -1010,12 +1076,32 @@ def _suggest_fen(config_path: Path, args: argparse.Namespace) -> None:
         losing_cp=args.losing_cp,
         min_gap_cp=args.min_gap_cp,
         max_plies=args.max_plies,
+        extension_beam_width=getattr(args, "extension_beam_width", 1),
         extend_critical=True,
         prefer_quiet_replies=not args.allow_check_reply_first,
         eval_cache_dir=args.eval_cache_dir,
         skip_standard_positions=not args.include_standard_positions,
         confirm_depth=None,
         confirm_multipv=None,
+        profile_jsonl=args.profile_jsonl,
+    )
+    extend_config = SelectionConfig(
+        depth=args.extend_depth,
+        multipv=args.extend_multipv or args.multipv,
+        win_cp=args.win_cp,
+        draw_floor_cp=args.draw_floor_cp,
+        losing_cp=args.losing_cp,
+        min_gap_cp=args.min_gap_cp,
+        max_plies=args.max_plies,
+        extension_beam_width=getattr(args, "extension_beam_width", 1),
+        extend_critical=True,
+        prefer_quiet_replies=not args.allow_check_reply_first,
+        eval_cache_dir=args.eval_cache_dir,
+        skip_standard_positions=not args.include_standard_positions,
+        confirm_depth=None,
+        confirm_multipv=None,
+        profile_jsonl=args.profile_jsonl,
+        eval_context="extension",
     )
     position = PositionRecord(
         ply=0,
@@ -1035,7 +1121,7 @@ def _suggest_fen(config_path: Path, args: argparse.Namespace) -> None:
     if selection:
         selection = confirm_selection(selection, engine, selector_config)
     if selection:
-        selection = extend_selection(selection, engine, selector_config)
+        selection = extend_selection(selection, engine, extend_config)
         selections.append(selection)
 
     puzzles = [
@@ -1070,30 +1156,23 @@ def _write_selection_report(selections, path: Path) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for selection in selections:
             second = selection.second
-            flags = _review_flags(selection)
-            handle.write(
-                json.dumps(
-                    {
-                        "kind": selection.kind,
-                        "move_number": selection.position.move_number,
-                        "side": selection.position.side,
-                        "best_san": selection.best.san,
-                        "best_uci": selection.best.move,
-                        "best_score_cp": selection.best.score_cp,
-                        "second_san": second.san if second else None,
-                        "second_uci": second.move if second else None,
-                        "second_score_cp": second.score_cp if second else None,
-                        "flags": flags,
-                        "line": selection.best.pv or [selection.best.move],
-                        "fen": selection.position.fen,
-                        "source": selection.position.site,
-                        "reason": selection.reason,
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-
+            record = {
+                "kind": selection.kind,
+                "move_number": selection.position.move_number,
+                "side": selection.position.side,
+                "best_san": selection.best.san,
+                "best_uci": selection.best.move,
+                "best_score_cp": selection.best.score_cp,
+                "second_san": second.san if second else None,
+                "second_uci": second.move if second else None,
+                "second_score_cp": second.score_cp if second else None,
+                "flags": _review_flags(selection),
+                "line": selection.best.pv or [selection.best.move],
+                "fen": selection.position.fen,
+                "source": selection.position.site,
+                "reason": selection.reason,
+            }
+            handle.write(json.dumps(_enrich_report_record(record), ensure_ascii=False) + "\n")
 
 def _review_flags(selection) -> list[str]:
     flags = list(selection.flags)
@@ -1116,16 +1195,7 @@ def _refresh_report_flags(input_report: Path, output_report: Path | None) -> Non
         for line in handle:
             if not line.strip():
                 continue
-            record = json.loads(line)
-            record["flags"] = _derived_review_flags(
-                record.get("flags", []),
-                fen=record.get("fen", ""),
-                line=record.get("line", []),
-                best_san=record.get("best_san", ""),
-                best_uci=record.get("best_uci", ""),
-                second_san=record.get("second_san"),
-            )
-            records.append(record)
+            records.append(_enrich_report_record(json.loads(line)))
 
     output_report.parent.mkdir(parents=True, exist_ok=True)
     with output_report.open("w", encoding="utf-8") as handle:
@@ -1133,6 +1203,114 @@ def _refresh_report_flags(input_report: Path, output_report: Path | None) -> Non
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     print(f"Wrote {output_report} with {len(records)} refreshed tactic(s)")
 
+def _reextend_report(config_path: Path, args: argparse.Namespace) -> None:
+    import pyffish
+    from .selector import MoveEval, PositionRecord, Selection, extend_selection, _load_uci_engine
+
+    config = load_config(config_path)
+    files = list(args.files)
+    for pattern in args.glob:
+        files.extend(sorted(Path().glob(pattern)))
+    files = [path for path in dict.fromkeys(files) if path.exists()]
+    if not files:
+        raise SystemExit("No report files selected.")
+
+    uci_path = config.paths.variant_puzzler / "uci.py"
+    engine = _load_uci_engine(uci_path, config.engine.path)
+    selector_config = SelectionConfig(
+        depth=args.depth,
+        multipv=args.multipv,
+        win_cp=200,
+        draw_floor_cp=-80,
+        losing_cp=-150,
+        min_gap_cp=150,
+        max_plies=args.max_plies,
+        extension_beam_width=args.extension_beam_width,
+        extend_critical=True,
+        prefer_quiet_replies=True,
+        eval_cache_dir=args.eval_cache_dir,
+        skip_standard_positions=True,
+        profile_jsonl=args.profile_jsonl,
+        eval_context="extension",
+    )
+
+    total_records = 0
+    candidates = 0
+    extended = 0
+    for path in files:
+        records: list[dict] = []
+        file_candidates = 0
+        file_extended = 0
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                total_records += 1
+                old_line = list(record.get("line") or [])
+                if len(old_line) == args.line_plies:
+                    candidates += 1
+                    file_candidates += 1
+                    selection = _record_to_selection(record, old_line)
+                    try:
+                        new_selection = extend_selection(selection, engine, selector_config)
+                    except Exception as exc:
+                        print(f"failed to re-extend {path} {record.get('source')} move {record.get('move_number')}: {exc}")
+                        new_selection = selection
+                    new_line = list(new_selection.best.pv or [])
+                    if len(new_line) > len(old_line):
+                        record["line"] = new_line
+                        record["reason"] = f"{record.get('reason', '')}; re-extended to {len(new_line)} plies"
+                        file_extended += 1
+                        extended += 1
+                records.append(_enrich_report_record(record))
+
+        with path.open("w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if file_candidates or file_extended:
+            print(f"{path}: candidates={file_candidates} extended={file_extended}")
+
+    print(f"Done. files={len(files)} records={total_records} candidates={candidates} extended={extended}")
+
+
+def _record_to_selection(record: dict, line: list[str]):
+    from .selector import MoveEval, PositionRecord, Selection
+
+    fen = record.get("fen", "")
+    fields = fen.split()
+    position = PositionRecord(
+        ply=0,
+        move_number=int(record.get("move_number") or (fields[-1] if fields else 0) or 0),
+        side=record.get("side") or (fields[1] if len(fields) > 1 else "w"),
+        fen=fen,
+        variant="seirawan",
+        site=record.get("source", ""),
+        previous_move=None,
+        previous_uci=None,
+    )
+    best = MoveEval(
+        move=record.get("best_uci") or (line[0] if line else ""),
+        san=record.get("best_san") or "",
+        score_cp=int(record.get("best_score_cp") or 0),
+        pv=line or [record.get("best_uci", "")],
+    )
+    second = None
+    if record.get("second_uci"):
+        second = MoveEval(
+            move=record.get("second_uci"),
+            san=record.get("second_san") or "",
+            score_cp=int(record.get("second_score_cp") or 0),
+            pv=[record.get("second_uci")],
+        )
+    return Selection(
+        position=position,
+        kind=record.get("kind") or "winning",
+        best=best,
+        second=second,
+        reason=record.get("reason", ""),
+        flags=tuple(record.get("flags") or ()),
+    )
 
 def _combine_reports(reports: list[Path], glob_pattern: str, output: Path) -> None:
     inputs = reports or sorted(Path().glob(glob_pattern))
@@ -1145,15 +1323,7 @@ def _combine_reports(reports: list[Path], glob_pattern: str, output: Path) -> No
             for line in handle:
                 if not line.strip():
                     continue
-                record = json.loads(line)
-                record["flags"] = _derived_review_flags(
-                    record.get("flags", []),
-                    fen=record.get("fen", ""),
-                    line=record.get("line", []),
-                    best_san=record.get("best_san", ""),
-                    best_uci=record.get("best_uci", ""),
-                    second_san=record.get("second_san"),
-                )
+                record = _enrich_report_record(json.loads(line))
                 key = (
                     record.get("source"),
                     record.get("fen"),
@@ -1172,7 +1342,6 @@ def _combine_reports(reports: list[Path], glob_pattern: str, output: Path) -> No
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     print(f"Wrote {output} with {len(records)} tactic(s) from {len(inputs)} report file(s)")
 
-
 def _export_web(report_jsonl: Path, output_json: Path) -> None:
     hidden_flags = {"standard-like", "trivial-recapture", "trivial-capture", "check-evasion"}
     puzzles = []
@@ -1180,15 +1349,8 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
         for line in handle:
             if not line.strip():
                 continue
-            record = json.loads(line)
-            flags = _derived_review_flags(
-                record.get("flags", []),
-                fen=record.get("fen", ""),
-                line=record.get("line", []),
-                best_san=record.get("best_san", ""),
-                best_uci=record.get("best_uci", ""),
-                second_san=record.get("second_san"),
-            )
+            record = _enrich_report_record(json.loads(line))
+            flags = record.get("flags", [])
             puzzles.append(
                 {
                     "id": _web_puzzle_id(record),
@@ -1207,6 +1369,9 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
                         "second_cp": record.get("second_score_cp"),
                         "second_san": record.get("second_san"),
                     },
+                    "quality": record.get("quality", {}),
+                    "material": record.get("material", {}),
+                    "dedupe": record.get("dedupe", {}),
                     "tags": flags,
                     "categories": _web_categories(record, flags),
                     "hidden_by_default": bool(hidden_flags & set(flags)),
@@ -1223,9 +1388,181 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
     output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {output_json} with {len(puzzles)} puzzle(s)")
 
+def _enrich_report_record(record: dict) -> dict:
+    record = dict(record)
+    line = _normalize_line(record.get("line", []))
+    record["line"] = line
+    record["flags"] = _derived_review_flags(
+        record.get("flags", []),
+        fen=record.get("fen", ""),
+        line=line,
+        best_san=record.get("best_san", ""),
+        best_uci=record.get("best_uci", ""),
+        second_san=record.get("second_san"),
+    )
+    record["material"] = _record_material_metadata(record, line)
+    record["quality"] = _record_quality_metadata(record, line)
+    record["dedupe"] = _record_dedupe_metadata(record, line)
+    return record
 
 
+def _normalize_line(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    if isinstance(value, str):
+        if "," in value:
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return [item.strip() for item in value.split() if item.strip()]
+    return []
 
+
+def _record_material_metadata(record: dict, line: list[str]) -> dict:
+    fen = record.get("fen", "")
+    side = record.get("side") or (fen.split()[1] if len(fen.split()) > 1 else "w")
+    before = _material_advantage(_fen_board(fen), side) if fen else None
+    after_first = _material_after_moves(fen, line[:1], side) if line else None
+    after_line = _material_after_moves(fen, line, side) if line else None
+    return {
+        "side": side,
+        "before": before,
+        "after_first": after_first,
+        "after_line": after_line,
+        "swing_first": None if before is None or after_first is None else after_first - before,
+        "swing_line": None if before is None or after_line is None else after_line - before,
+    }
+
+
+def _material_after_moves(fen: str, moves: list[str], side: str) -> int | None:
+    if not fen:
+        return None
+    try:
+        import pyffish
+
+        final_fen = pyffish.get_fen("seirawan", fen, moves)
+    except Exception:
+        final_fen = _fallback_fen_after_first_move(fen, moves[:1]) if len(moves) == 1 else ""
+    return _material_advantage(_fen_board(final_fen), side) if final_fen else None
+
+
+def _fallback_fen_after_first_move(fen: str, moves: list[str]) -> str:
+    if not moves or len(moves[0]) < 4:
+        return ""
+    board = _fen_board(fen)
+    move = moves[0]
+    source = move[:2]
+    target = move[2:4]
+    piece = board.pop(source, None)
+    if not piece:
+        return ""
+    promotion = move[4].lower() if len(move) >= 5 and move[4].lower() in PIECE_VALUES else ""
+    side = fen.split()[1] if len(fen.split()) > 1 else "w"
+    board[target] = (promotion.upper() if side == "w" else promotion) if promotion else piece
+    return _board_to_fen_piece_placement(board) + " " + " ".join(fen.split()[1:])
+
+
+def _board_to_fen_piece_placement(board: dict[str, str]) -> str:
+    rows = []
+    for rank in range(8, 0, -1):
+        empty = 0
+        row = []
+        for file_ord in range(ord("a"), ord("h") + 1):
+            piece = board.get(f"{chr(file_ord)}{rank}")
+            if piece:
+                if empty:
+                    row.append(str(empty))
+                    empty = 0
+                row.append(piece)
+            else:
+                empty += 1
+        if empty:
+            row.append(str(empty))
+        rows.append("".join(row))
+    return "/".join(rows)
+
+
+def _record_quality_metadata(record: dict, line: list[str]) -> dict:
+    best = _number_or_none(record.get("best_score_cp"))
+    second = _number_or_none(record.get("second_score_cp"))
+    gap = None if best is None or second is None else best - second
+    flags = set(record.get("flags", []))
+    material = record.get("material", {})
+    score = 50
+    if gap is not None:
+        score += min(25, max(0, gap - 150) // 20)
+    if "confirmed at depth" in str(record.get("reason", "")):
+        score += 12
+    if len(line) >= 5:
+        score += 8
+    elif len(line) == 1:
+        score -= 5
+    if material.get("swing_first") is not None and material.get("swing_line") is not None:
+        if material["swing_first"] >= 3 and len(line) == 1:
+            score -= 18
+        elif material["swing_line"] > material["swing_first"]:
+            score += 6
+    for flag, penalty in {
+        "standard-like": 20,
+        "trivial-capture": 18,
+        "trivial-recapture": 16,
+        "check-evasion": 8,
+    }.items():
+        if flag in flags:
+            score -= penalty
+    score = max(0, min(100, int(score)))
+    return {
+        "eval_gap_cp": gap,
+        "line_plies": len(line),
+        "confidence": score,
+        "bucket": _quality_bucket(score),
+    }
+
+
+def _quality_bucket(score: int) -> str:
+    if score >= 75:
+        return "high"
+    if score >= 50:
+        return "medium"
+    return "low"
+
+
+def _record_dedupe_metadata(record: dict, line: list[str]) -> dict:
+    fen = record.get("fen", "")
+    exact = {
+        "fen": _canonical_report_fen(fen),
+        "kind": record.get("kind"),
+        "best_uci": record.get("best_uci"),
+        "line": line,
+    }
+    family = {
+        "kind": record.get("kind"),
+        "best_san": _clean_san(record.get("best_san", "")),
+        "line_plies": len(line),
+        "material_swing_line": (record.get("material") or {}).get("swing_line"),
+    }
+    return {
+        "exact_key": _short_hash(exact),
+        "family_key": _short_hash(family),
+    }
+
+
+def _canonical_report_fen(fen: str) -> str:
+    fields = fen.split()
+    return " ".join(fields[:4])
+
+
+def _clean_san(san: str) -> str:
+    return re.sub(r"[+#?!]", "", str(san or ""))
+
+
+def _short_hash(value: dict) -> str:
+    return hashlib.sha1(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _number_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 def _web_line_san(record: dict) -> str:
     line = record.get("line", []) or []
     if not line:
@@ -1432,11 +1769,12 @@ def _is_trivial_capture(fen: str, best_uci: str, best_san: str, line: list[str])
         return False
     if "x" not in best_san and not _is_enemy_piece(captured_piece, side):
         return False
+    before = _material_advantage(board, side)
     after = dict(board)
     after.pop(source, None)
     promotion = best_uci[4].lower() if len(best_uci) >= 5 and best_uci[4].lower() in PIECE_VALUES else ""
     after[target] = (promotion.upper() if side == "w" else promotion) if promotion else moving_piece
-    return _material_advantage(after, side) >= 3
+    return _material_advantage(after, side) - before >= 3
 
 
 def _fen_board(fen: str) -> dict[str, str]:
@@ -1708,10 +2046,10 @@ function show(i) {{
   renderBoard(t.fen, t.side);
   document.getElementById("counter").textContent = `${{index + 1}} / ${{visible.length}}`;
   document.getElementById("title").textContent = `${{t.kind}} tactic: ${{t.side === "w" ? "White" : "Black"}} to move`;
-  document.getElementById("source").textContent = `${{t.source || ""}} Â· move ${{t.move_number}}`;
+  document.getElementById("source").textContent = `${{t.source || ""}} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· move ${{t.move_number}}`;
   document.getElementById("scores").innerHTML = `Best <span class="score">${{t.best_san}} (${{t.best_score_cp}} cp)</span><br>Second ${{t.second_san || "-"}} (${{t.second_score_cp ?? "-"}} cp)`;
   document.getElementById("line").textContent = `Line: ${{(t.line || []).join(" ")}}`;
-  document.getElementById("reason").textContent = `${{t.reason}}${{t.flags?.length ? " Â· " + t.flags.join(", ") : ""}}`;
+  document.getElementById("reason").textContent = `${{t.reason}}${{t.flags?.length ? " ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· " + t.flags.join(", ") : ""}}`;
   document.getElementById("fen").textContent = t.fen;
   updateReveal();
 }}
@@ -1759,8 +2097,3 @@ def _detect_input_kind(path: Path) -> str:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
