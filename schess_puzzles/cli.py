@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import csv
@@ -1343,7 +1343,7 @@ def _combine_reports(reports: list[Path], glob_pattern: str, output: Path) -> No
     print(f"Wrote {output} with {len(records)} tactic(s) from {len(inputs)} report file(s)")
 
 def _export_web(report_jsonl: Path, output_json: Path) -> None:
-    hidden_flags = {"standard-like", "trivial-recapture", "trivial-capture", "check-evasion"}
+    hidden_flags = {"standard-like", "trivial-recapture", "trivial-capture", "check-evasion", "manual-reject"}
     puzzles = []
     with report_jsonl.open("r", encoding="utf-8") as handle:
         for line in handle:
@@ -1485,6 +1485,13 @@ def _record_quality_metadata(record: dict, line: list[str]) -> dict:
     second = _number_or_none(record.get("second_score_cp"))
     gap = None if best is None or second is None else best - second
     flags = set(record.get("flags", []))
+    if "manual-reject" in flags:
+        return {
+            "eval_gap_cp": gap,
+            "line_plies": len(line),
+            "confidence": 0,
+            "bucket": "rejected",
+        }
     material = record.get("material", {})
     score = 50
     if gap is not None:
@@ -1649,8 +1656,6 @@ def _web_is_endgame_fen(fen: str) -> bool:
     return queens == 0 and non_king_pawn <= 4
 
 def _web_puzzle_id(record: dict) -> str:
-    import hashlib
-
     key = json.dumps(
         {
             "source": record.get("source"),
@@ -1661,7 +1666,14 @@ def _web_puzzle_id(record: dict) -> str:
         },
         sort_keys=True,
     )
-    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(key.encode("utf-8")).digest()
+    value = int.from_bytes(digest[:6], "big")
+    alphabet = "23456789abcdefghjkmnpqrstuvwxyz"
+    chars = []
+    for _ in range(5):
+        value, index = divmod(value, len(alphabet))
+        chars.append(alphabet[index])
+    return "".join(chars)
 def _selfplay(config_path: Path, args: argparse.Namespace) -> None:
     config = load_config(config_path)
     uci_path = config.paths.variant_puzzler / "uci.py"
