@@ -30,13 +30,77 @@
 
 $ErrorActionPreference = "Stop"
 
+function Format-PythonCommand {
+    param([string[]]$CommandArgs)
+
+    if ($CommandArgs.Count -ge 3 -and $CommandArgs[0] -eq "-m" -and $CommandArgs[1] -eq "schess_puzzles.cli") {
+        $subcommand = $CommandArgs[2]
+        if ($subcommand -eq "combine-reports") {
+            $outputIndex = [Array]::IndexOf($CommandArgs, "--output")
+            $output = if ($outputIndex -ge 0 -and $outputIndex + 1 -lt $CommandArgs.Count) { $CommandArgs[$outputIndex + 1] } else { "<output>" }
+            $inputs = if ($outputIndex -gt 3) { $outputIndex - 3 } else { [Math]::Max($CommandArgs.Count - 3, 0) }
+            return "> python -m schess_puzzles.cli combine-reports <${inputs} report file(s)> --output $output"
+        }
+        if ($subcommand -eq "select-batch") {
+            $globIndex = [Array]::IndexOf($CommandArgs, "--glob")
+            $reportIndex = [Array]::IndexOf($CommandArgs, "--report-jsonl")
+            $glob = if ($globIndex -ge 0 -and $globIndex + 1 -lt $CommandArgs.Count) { $CommandArgs[$globIndex + 1] } else { "<glob>" }
+            $report = if ($reportIndex -ge 0 -and $reportIndex + 1 -lt $CommandArgs.Count) { $CommandArgs[$reportIndex + 1] } else { "<report>" }
+            return "> python -m schess_puzzles.cli select-batch --glob $glob --report-jsonl $report"
+        }
+        if ($subcommand -eq "selfplay") {
+            $gamesIndex = [Array]::IndexOf($CommandArgs, "--games")
+            $outIndex = [Array]::IndexOf($CommandArgs, "--output-dir")
+            $seedIndex = [Array]::IndexOf($CommandArgs, "--seed")
+            $games = if ($gamesIndex -ge 0 -and $gamesIndex + 1 -lt $CommandArgs.Count) { $CommandArgs[$gamesIndex + 1] } else { "?" }
+            $out = if ($outIndex -ge 0 -and $outIndex + 1 -lt $CommandArgs.Count) { $CommandArgs[$outIndex + 1] } else { "<output-dir>" }
+            $seed = if ($seedIndex -ge 0 -and $seedIndex + 1 -lt $CommandArgs.Count) { $CommandArgs[$seedIndex + 1] } else { "?" }
+            return "> python -m schess_puzzles.cli selfplay --games $games --output-dir $out --seed $seed"
+        }
+    }
+
+    return "> python $($CommandArgs -join ' ')"
+}
+
 function Invoke-Python {
     param([string[]]$CommandArgs)
     Write-Host ""
-    Write-Host "> python $($CommandArgs -join ' ')"
+    Write-Host (Format-PythonCommand $CommandArgs)
     & python @CommandArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Write-CondensedWorkerOutput {
+    param([object[]]$Lines)
+
+    $profileRows = 0
+    foreach ($item in $Lines) {
+        $line = "$item".TrimEnd()
+        if (-not $line) { continue }
+
+        if ($line -match '^=== Generating ') { Write-Host $line; continue }
+        if ($line -match '^Reusing existing ') { Write-Host $line; continue }
+        if ($line -match '^Done\. files=') { Write-Host $line; continue }
+        if ($line -match '^Wrote .*_report\.jsonl with \d+ refreshed tactic') { Write-Host $line; continue }
+        if ($line -match '^Wrote .*_review\.html with \d+ tactic') { Write-Host $line; continue }
+
+        if ($line -match '^By phase:') {
+            Write-Host "Profile summary:"
+            $profileRows = 0
+            continue
+        }
+        if ($line -match '^(engine_eval|extension_reply_scan|confirm_candidate|extend_critical_line)\s+' -and $profileRows -lt 6) {
+            Write-Host "  $line"
+            $profileRows += 1
+            continue
+        }
+
+        if ($line -match '(Traceback|Exception|Error|failed|Command failed)') {
+            Write-Host $line
+            continue
+        }
     }
 }
 
@@ -61,6 +125,7 @@ function Get-VisibleCount {
         "trivial-recapture" = $true
         "trivial-capture" = $true
         "check-evasion" = $true
+        "manual-reject" = $true
     }
     $count = 0
     foreach ($line in Get-Content -Path $path) {
@@ -89,6 +154,8 @@ function Update-CombinedArtifacts {
     $reports += Get-ChildItem -Path "data\puzzles" -Filter "selfplay_batch*_report.jsonl" -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { $_.FullName }
 
     $tmp = "data\puzzles\all_report.next.jsonl"
+    Write-Host ""
+    Write-Host "Combining $($reports.Count) report file(s) into data\puzzles\all_report.jsonl..."
     Invoke-Python (@("-m", "schess_puzzles.cli", "combine-reports") + $reports + @("--output", $tmp))
     Move-Item -Force -Path $tmp -Destination "data\puzzles\all_report.jsonl"
     Invoke-Python @("-m", "schess_puzzles.cli", "review-html", "data\puzzles\all_report.jsonl", "data\puzzles\all_review.html")
@@ -262,8 +329,9 @@ while ($visible -lt $TargetVisible -and $batchesRun -lt $MaxBatches) {
         $failed = $false
         foreach ($job in $jobs) {
             Write-Host ""
-            Write-Host "--- Worker $($job.Name) output ---"
-            Receive-Job -Job $job
+            Write-Host "--- Worker $($job.Name) summary ---"
+            $workerOutput = Receive-Job -Job $job
+            Write-CondensedWorkerOutput -Lines $workerOutput
             if ($job.State -ne "Completed") { $failed = $true }
             Remove-Job -Job $job
         }
@@ -280,6 +348,4 @@ Write-Host ""
 Write-Host "Growth run finished. visible=$visible target=$TargetVisible batches_run=$batchesRun workers=$Workers profile=$([bool]$Profile)"
 Write-Host "Review: data\puzzles\all_review.html"
 Write-Host "Publish files: docs\"
-
-
 
