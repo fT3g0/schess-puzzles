@@ -4,6 +4,10 @@
     [int]$SelfPlayGames = 20,
     [int]$SelectorDepth = 10,
     [int]$MultiPv = 6,
+    [int]$RescreenDepth = 14,
+    [int]$RescreenMultiPv = 8,
+    [int]$RescreenMinGapCp = 80,
+    [int]$RescreenMarginCp = 120,
     [int]$ConfirmDepth = 20,
     [int]$ConfirmMultiPv = 3,
     [int]$ConfirmFastDepth = 17,
@@ -126,6 +130,7 @@ function Get-VisibleCount {
         "trivial-capture" = $true
         "check-evasion" = $true
         "manual-reject" = $true
+        "failed-reverify" = $true
     }
     $count = 0
     foreach ($line in Get-Content -Path $path) {
@@ -151,12 +156,12 @@ function Update-CombinedArtifacts {
     if (Test-Path "data\puzzles\chesscom_all_report.jsonl") {
         $reports += "data\puzzles\chesscom_all_report.jsonl"
     }
-    $reports += Get-ChildItem -Path "data\puzzles" -Filter "selfplay_batch*_report.jsonl" -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { $_.FullName }
+    $selfPlayCount = @(Get-ChildItem -Path "data\puzzles" -Filter "selfplay_batch*_report.jsonl" -ErrorAction SilentlyContinue).Count
 
     $tmp = "data\puzzles\all_report.next.jsonl"
     Write-Host ""
-    Write-Host "Combining $($reports.Count) report file(s) into data\puzzles\all_report.jsonl..."
-    Invoke-Python (@("-m", "schess_puzzles.cli", "combine-reports") + $reports + @("--output", $tmp))
+    Write-Host "Combining $($reports.Count + $selfPlayCount) report file(s) into data\puzzles\all_report.jsonl..."
+    Invoke-Python (@("-m", "schess_puzzles.cli", "combine-reports") + $reports + @("--glob", "data/puzzles/selfplay_batch*_report.jsonl", "--output", $tmp))
     Move-Item -Force -Path $tmp -Destination "data\puzzles\all_report.jsonl"
     Invoke-Python @("-m", "schess_puzzles.cli", "review-html", "data\puzzles\all_report.jsonl", "data\puzzles\all_review.html")
     Invoke-Python @("-m", "schess_puzzles.cli", "export-web", "data\puzzles\all_report.jsonl", "web\public\puzzles.json")
@@ -214,6 +219,10 @@ function Invoke-SelfPlayBatch {
             "--limit", "$SelfPlayGames",
             "--depth", "$SelectorDepth",
             "--multipv", "$MultiPv",
+            "--rescreen-depth", "$RescreenDepth",
+            "--rescreen-multipv", "$RescreenMultiPv",
+            "--rescreen-min-gap-cp", "$RescreenMinGapCp",
+            "--rescreen-margin-cp", "$RescreenMarginCp",
             "--confirm-depth", "$ConfirmDepth",
             "--confirm-multipv", "$ConfirmMultiPv",
             "--extend-critical",
@@ -285,6 +294,10 @@ while ($visible -lt $TargetVisible -and $batchesRun -lt $MaxBatches) {
                     "-SelfPlayGames", "$($Params.SelfPlayGames)",
                     "-SelectorDepth", "$($Params.SelectorDepth)",
                     "-MultiPv", "$($Params.MultiPv)",
+                    "-RescreenDepth", "$($Params.RescreenDepth)",
+                    "-RescreenMultiPv", "$($Params.RescreenMultiPv)",
+                    "-RescreenMinGapCp", "$($Params.RescreenMinGapCp)",
+                    "-RescreenMarginCp", "$($Params.RescreenMarginCp)",
                     "-ConfirmDepth", "$($Params.ConfirmDepth)",
                     "-ConfirmMultiPv", "$($Params.ConfirmMultiPv)",
                     "-ConfirmFastDepth", "$($Params.ConfirmFastDepth)",
@@ -311,7 +324,8 @@ while ($visible -lt $TargetVisible -and $batchesRun -lt $MaxBatches) {
                 & powershell @args
                 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             } -ArgumentList $root, $batch, @{
-                SelfPlayGames=$SelfPlayGames; SelectorDepth=$SelectorDepth; MultiPv=$MultiPv; ConfirmDepth=$ConfirmDepth;
+                SelfPlayGames=$SelfPlayGames; SelectorDepth=$SelectorDepth; MultiPv=$MultiPv; RescreenDepth=$RescreenDepth;
+                RescreenMultiPv=$RescreenMultiPv; RescreenMinGapCp=$RescreenMinGapCp; RescreenMarginCp=$RescreenMarginCp; ConfirmDepth=$ConfirmDepth;
                 ConfirmMultiPv=$ConfirmMultiPv; ConfirmFastDepth=$ConfirmFastDepth; ConfirmClearGapCp=$ConfirmClearGapCp;
                 ConfirmClearMarginCp=$ConfirmClearMarginCp; ConfirmBorderlineDepth=$ConfirmBorderlineDepth;
                 ConfirmBorderlineWinCp=$ConfirmBorderlineWinCp; ConfirmBorderlineGapCp=$ConfirmBorderlineGapCp;
@@ -348,4 +362,3 @@ Write-Host ""
 Write-Host "Growth run finished. visible=$visible target=$TargetVisible batches_run=$batchesRun workers=$Workers profile=$([bool]$Profile)"
 Write-Host "Review: data\puzzles\all_review.html"
 Write-Host "Publish files: docs\"
-

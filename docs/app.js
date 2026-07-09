@@ -12,11 +12,12 @@ const state = {
   showUnmoved: false,
   pocket: "",
   gatingSquares: new Set(),
+  epSquare: "",
   openDetailFilter: "",
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
-const hiddenTags = new Set(["standard-like", "trivial-recapture", "trivial-capture", "check-evasion"]);
+const hiddenTags = new Set(["standard-like", "trivial-recapture", "trivial-capture", "check-evasion", "manual-reject", "failed-reverify"]);
 const boardEl = document.getElementById("board");
 const counterEl = document.getElementById("counter");
 const titleEl = document.getElementById("title");
@@ -317,6 +318,7 @@ function resetPuzzle() {
     boardEl.innerHTML = "";
     state.pocket = "";
     state.gatingSquares = new Set();
+    state.epSquare = "";
     renderReserve();
     counterEl.textContent = "0 / 0";
     titleEl.textContent = "No puzzles";
@@ -334,6 +336,7 @@ function resetPuzzle() {
   state.solved = false;
   state.pocket = pocketFromFen(puzzle.fen);
   state.gatingSquares = gatingOptionSquaresFromFen(puzzle.fen);
+  state.epSquare = epSquareFromFen(puzzle.fen);
   solutionEl.classList.add("hidden");
   controls.analysis.classList.add("hidden");
   counterEl.textContent = `${state.index + 1} / ${state.filtered.length}${puzzle.id ? `, ID: ${puzzle.id}` : ""}`;
@@ -380,9 +383,14 @@ function sideFromFen(fen) {
   return (fen || "").split(/\s+/)[1];
 }
 
+function epSquareFromFen(fen) {
+  const ep = (fen || "").split(/\s+/)[3] || "";
+  return /^[a-h][36]$/.test(ep) ? ep : "";
+}
+
 function renderBoard() {
   boardEl.innerHTML = "";
-  const unmovedSquares = state.showUnmoved ? state.gatingSquares : new Set();
+  const optionSquares = visibleOptionSquares();
   const ranks = state.orientation === "b" ? [1,2,3,4,5,6,7,8] : [8,7,6,5,4,3,2,1];
   const visibleFiles = state.orientation === "b" ? [...files].reverse() : files;
   for (const rank of ranks) {
@@ -394,7 +402,7 @@ function renderBoard() {
       const pendingSquares = pendingChoiceSquares();
       if (pendingSquares.from === square) button.classList.add("selected");
       if (pendingSquares.to === square) button.classList.add("choice-target");
-      if (unmovedSquares.has(square)) button.classList.add("unmoved");
+      if (optionSquares.has(square)) button.classList.add("unmoved");
       button.dataset.square = square;
       button.addEventListener("click", () => onSquare(square));
       const piece = state.board[square];
@@ -496,13 +504,26 @@ function toggleUnmovedPieces() {
 function updateUnmovedButton() {
   if (!controls.unmoved) return;
   controls.unmoved.classList.toggle("active", state.showUnmoved);
-  const count = state.gatingSquares.size;
+  const count = optionSquareCount();
   controls.unmoved.disabled = count === 0;
   if (count === 0) {
-    controls.unmoved.textContent = "No castling/gating options";
+    controls.unmoved.textContent = "No castling/gating/en-passant options";
   } else {
-    controls.unmoved.textContent = state.showUnmoved ? `Hide castling/gating options (${count})` : `Castling/gating options (${count})`;
+    controls.unmoved.textContent = state.showUnmoved ? `Hide castling/gating/en-passant options (${count})` : `Castling/gating/en-passant options (${count})`;
   }
+}
+
+function visibleOptionSquares() {
+  if (!state.showUnmoved) return new Set();
+  const squares = new Set(state.gatingSquares || []);
+  if (state.epSquare) squares.add(state.epSquare);
+  return squares;
+}
+
+function optionSquareCount() {
+  const squares = new Set(state.gatingSquares || []);
+  if (state.epSquare) squares.add(state.epSquare);
+  return squares.size;
 }
 
 function unmovedSquaresFromFen(fen) {
@@ -626,11 +647,16 @@ function tryUserMove(from, to) {
   const matchesExpectedPrefix = moveMatchesPrefix(expected, userPrefix);
   const choices = matchesExpectedPrefix ? moveChoices(from, to, expected) : [];
   const suffixes = choices.length ? choices.map(([suffix]) => suffix) : [""];
-  if (!suffixes.some((suffix) => isLegalUserMove(from, to, suffix))) {
-    setBoardFeedback("");
-    setStatus("Illegal move.");
-    renderBoard();
-    return;
+  const hasLegalSuffix = suffixes.some((suffix) => isLegalUserMove(from, to, suffix));
+  if (!hasLegalSuffix) {
+    const side = currentSideToMove();
+    const plausibleWrongMove = !matchesExpectedPrefix && isPseudoLegalMove(from, to) && !kingInCheck(state.board, side);
+    if (!plausibleWrongMove) {
+      setBoardFeedback("");
+      setStatus("Illegal move.");
+      renderBoard();
+      return;
+    }
   }
 
   if (!matchesExpectedPrefix) {
@@ -748,6 +774,7 @@ function boardAfterMove(board, from, to, suffix, piece) {
     if (suffix === "h" || suffix === "e") next[gateSquare] = white ? suffix.toUpperCase() : suffix;
     return next;
   }
+  if (isEnPassantMove(from, to, piece)) delete next[enPassantCapturedSquare(to, piece)];
   delete next[from];
   next[to] = promotedPiece(piece, to, suffix || "");
   if (isGateSuffix(suffix || "", from, piece, to)) {
@@ -817,7 +844,8 @@ function isPseudoLegalMove(from, to) {
     const startRank = piece === piece.toUpperCase() ? "2" : "7";
     if (dx === 0 && dy === forward && !target) return true;
     if (dx === 0 && dy === 2 * forward && from[1] === startRank && !target && !state.board[`${from[0]}${Number(from[1]) + forward}`]) return true;
-    return adx === 1 && dy === forward && Boolean(target) && !sameColor(piece, target);
+    if (adx === 1 && dy === forward && Boolean(target) && !sameColor(piece, target)) return true;
+    return isEnPassantMove(from, to, piece);
   }
   if (role === "N") return isKnightStep(adx, ady);
   if (role === "B") return isDiagonal(adx, ady) && isPathClear(from, to);
@@ -835,6 +863,21 @@ function isBoardSquare(square) {
 
 function sameColor(a, b) {
   return (a === a.toUpperCase()) === (b === b.toUpperCase());
+}
+
+function isEnPassantMove(from, to, piece) {
+  if (!piece || piece.toUpperCase() !== "P" || !state.epSquare || to !== state.epSquare) return false;
+  if (state.board[to]) return false;
+  const dx = Math.abs(files.indexOf(to[0]) - files.indexOf(from[0]));
+  const dy = Number(to[1]) - Number(from[1]);
+  const forward = piece === piece.toUpperCase() ? 1 : -1;
+  const captured = state.board[enPassantCapturedSquare(to, piece)];
+  return dx === 1 && dy === forward && Boolean(captured) && captured.toUpperCase() === "P" && !sameColor(piece, captured);
+}
+
+function enPassantCapturedSquare(to, piece) {
+  const forward = piece === piece.toUpperCase() ? 1 : -1;
+  return `${to[0]}${Number(to[1]) - forward}`;
 }
 
 function isKnightStep(adx, ady) {
@@ -1029,6 +1072,7 @@ function applyMove(uci) {
     return;
   }
 
+  if (isEnPassantMove(from, to, piece)) delete state.board[enPassantCapturedSquare(to, piece)];
   delete state.board[from];
   state.board[to] = promotedPiece(piece, to, suffix);
   state.gatingSquares.delete(from);
@@ -1196,8 +1240,11 @@ function inferMotifs(puzzle) {
   if (puzzle.kind === "winning") motifs.add(scoreMotif(puzzle));
   if (tags.has("check-evasion")) motifs.add("defensive-move");
   if (tags.has("trivial-recapture") || tags.has("complex-recapture") || tags.has("recapture")) motifs.add("recapture");
-  if (san.includes("#")) motifs.add("checkmate");
-  if (san.includes("+") && !san.includes("#")) motifs.add("check");
+  const fullLineSan = puzzle.solution_line_san || "";
+  const bestScore = puzzle.scores?.best_cp;
+  const isMateScore = Number.isFinite(bestScore) && bestScore >= 90000;
+  if (san.includes("#") || fullLineSan.includes("#") || isMateScore) motifs.add("checkmate");
+  if (san.includes("+") && !san.includes("#") && !isMateScore) motifs.add("check");
   if (san.includes("=")) motifs.add("promotion");
   if (/[a-h][18][a-h][18][nbrqeh]/i.test(first)) motifs.add("promotion");
   if (san.includes("/H") || san.includes("/E") || /[HE]/.test(san)) motifs.add("fairy-piece");

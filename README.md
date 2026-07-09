@@ -300,10 +300,10 @@ For batch generation, keep the first pass shallow enough to be efficient and
 confirm only the candidate tactics at higher depth:
 
 ```powershell
-python -m schess_puzzles.cli select-batch --depth 10 --multipv 6 --confirm-depth 20 --confirm-multipv 3 --confirm-fast-depth 17 --extend-critical --max-plies 7 --extension-beam-width 2
+python -m schess_puzzles.cli select-batch --depth 10 --multipv 6 --rescreen-depth 14 --rescreen-multipv 8 --confirm-depth 20 --confirm-multipv 3 --confirm-fast-depth 17 --extend-critical --max-plies 7 --extension-beam-width 2
 ```
 
-The PowerShell batch helpers use this setup by default: clear candidates can be accepted at depth 17, all other routine candidates are confirmed at depth 20, `confirm-multipv=3` is used for speed, and critical continuations use a small beam (`extension-beam-width=2`) up to 7 plies. Depth 22 is reserved for manual borderline candidates, where spending extra time is worthwhile. If a candidate does not remain the same tactic with the same best move at the confirmation depth, it is dropped.
+The PowerShell batch helpers use this setup by default. The root pass stays cheap at depth 10, but promising near-misses are rescreened at depth 14 before being discarded. Clear candidates can be accepted at depth 17, all other routine candidates are confirmed at depth 20, `confirm-multipv=3` is used for speed, and critical continuations use a small beam (`extension-beam-width=2`) up to 7 plies. Depth 22 is reserved for manual borderline candidates, where spending extra time is worthwhile. If a candidate does not remain the same tactic with the same best move at the confirmation depth, it is dropped.
 
 One-move recaptures are detected as `recapture` flags. They can be kept for pure
 evaluation debugging or removed for puzzle quality:
@@ -343,7 +343,7 @@ Self-play growth can run independent batches in parallel:
 powershell -ExecutionPolicy Bypass -File .\tools\Grow-SelfPlayToTarget.ps1 -TargetVisible 500 -Workers 4 -Profile
 ```
 
-Each worker uses a separate raw directory, report file, eval-cache directory, and optional profile file. The combined reports and website export are updated after each worker wave.
+Each worker uses a separate raw directory, report file, eval-cache directory, and optional profile file. The combined reports and website export are updated after each worker wave. On the 2026-07-07 pychess sample, the adaptive depth-10 -> depth-14 rescreen found more tactics than the full depth-14 scan while taking much less wall time, so this is now the default growth path.
 ## Puzzle Quality Metadata
 
 Reports are enriched during `refresh-report-flags`, `combine-reports`, and `export-web` without rerunning the engine. Each tactic record keeps:
@@ -353,6 +353,31 @@ Reports are enriched during `refresh-report-flags`, `combine-reports`, and `expo
 - `dedupe`: stable exact and family keys for later duplicate or near-duplicate curation.
 
 These fields are intentionally descriptive first. They should be inspected against hand-reviewed puzzles before they become hard filters.
+
+## Manual Suggestions And Synthetic Mutation Lab
+
+`schess_puzzles.cli suggest-fen` is the direct path for user-suggested candidate
+positions. It skips the low-depth game scan and evaluates the supplied FEN as an
+already interesting candidate, then extends forcing replies with the normal line
+extension logic.
+
+```powershell
+python -m schess_puzzles.cli suggest-fen "6n1/6kp/6p1/8/1e6/5K1P/1pr3P1/3E4[] w - - 0 56" --source user_suggestion_001 --depth 20 --multipv 8 --extend-depth 12 --max-plies 13 --extension-beam-width 2 --include-standard-positions
+```
+
+`mutate-candidate` is an experimental lab command for creating synthetic puzzle
+candidates from a tactical kernel. The first version tries one-piece additions on
+empty squares, evaluates every legal mutation at high depth, extends any passing
+only-move tactic, and writes a separate report for manual review.
+
+```powershell
+python -m schess_puzzles.cli mutate-candidate "8/6kp/6p1/8/1e6/5K1P/1pr3P1/3E4[] w - - 0 56" --pieces n,N,b,B,r,R,q,Q,h,H,e,E --depth 20 --multipv 8 --extend-depth 12 --max-plies 9 --min-line-plies 3 --output-jsonl data\puzzles\mutation_lab.jsonl --report-jsonl data\puzzles\mutation_lab_report.jsonl
+python -m schess_puzzles.cli review-html data\puzzles\mutation_lab_report.jsonl data\puzzles\mutation_lab_review.html
+```
+
+Mutation-lab output is intentionally not merged automatically. Synthetic results
+should be reviewed first, then combined into `all_report.jsonl` only when they
+look natural and tactically sound.
 ## Static Puzzle Website
 
 The public-facing puzzle viewer is designed as a static site. Python remains the
@@ -430,3 +455,11 @@ python -m schess_puzzles.cli solve data/puzzles/puzzles.jsonl
 
 The scaffold is intentionally conservative: source fetchers can be expanded per
 site once the exact endpoints and account requirements are known.
+
+### Retrograde Chain Lab
+
+`retrograde-chain` repeats predecessor search for multiple reverse plies. Each `--capture-pieces` and `--san-regex` argument applies to the corresponding reverse step, so a mate pattern can be grown backwards through forcing captures and then optionally evaluated as puzzle candidates.
+
+```powershell
+python -m schess_puzzles.cli retrograde-chain "8/3E3p/6pk/8/1e6/2b2K1P/1pr5/8[] w - - 2 57" --steps 2 --captures --capture-pieces q --capture-pieces h --san-regex Kx --san-regex Qx --evaluate
+```

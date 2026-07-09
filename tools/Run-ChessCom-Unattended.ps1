@@ -9,6 +9,10 @@
     [int]$BatchSize = 20,
     [int]$MaxBatches = 9999,
     [int]$Workers = 1,
+    [int]$RescreenDepth = 14,
+    [int]$RescreenMultiPv = 8,
+    [int]$RescreenMinGapCp = 80,
+    [int]$RescreenMarginCp = 120,
     [int]$FetchRetries = 3,
     [int]$FetchRetryDelaySeconds = 20,
     [switch]$Profile,
@@ -131,6 +135,10 @@ function Invoke-ChessComFileBatch {
         "--limit", "0",
         "--depth", "10",
         "--multipv", "6",
+        "--rescreen-depth", "$RescreenDepth",
+        "--rescreen-multipv", "$RescreenMultiPv",
+        "--rescreen-min-gap-cp", "$RescreenMinGapCp",
+        "--rescreen-margin-cp", "$RescreenMarginCp",
         "--confirm-depth", "20",
         "--confirm-multipv", "3",
         "--confirm-fast-depth", "17",
@@ -165,7 +173,7 @@ function Invoke-ChessComFileBatchJob {
     $serializedFiles = @($Files | ForEach-Object { $_.FullName })
     $profileEnabled = [bool]$Profile
     $job = Start-Job -Name ("chesscom_batch{0:D2}" -f $Batch) -ScriptBlock {
-        param($Root, $FilePaths, $BatchNumber, $ProfileEnabled)
+        param($Root, $FilePaths, $BatchNumber, $ProfileEnabled, $RescreenDepth, $RescreenMultiPv, $RescreenMinGapCp, $RescreenMarginCp)
         Set-Location $Root
         $batchName = "chesscom_batch{0:D2}" -f $BatchNumber
         $jsonl = "data\puzzles\$batchName.jsonl"
@@ -179,6 +187,10 @@ function Invoke-ChessComFileBatchJob {
             "--limit", "0",
             "--depth", "10",
             "--multipv", "6",
+            "--rescreen-depth", "$RescreenDepth",
+            "--rescreen-multipv", "$RescreenMultiPv",
+            "--rescreen-min-gap-cp", "$RescreenMinGapCp",
+            "--rescreen-margin-cp", "$RescreenMarginCp",
             "--confirm-depth", "20",
             "--confirm-multipv", "3",
             "--confirm-fast-depth", "17",
@@ -206,7 +218,7 @@ function Invoke-ChessComFileBatchJob {
             & python tools\summarize_profile.py $profilePath
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
-    } -ArgumentList $root, $serializedFiles, $Batch, $profileEnabled
+    } -ArgumentList $root, $serializedFiles, $Batch, $profileEnabled, $RescreenDepth, $RescreenMultiPv, $RescreenMinGapCp, $RescreenMarginCp
     Add-Member -InputObject $job -MemberType NoteProperty -Name FilePaths -Value $serializedFiles
     return $job
 }

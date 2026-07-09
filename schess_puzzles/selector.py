@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import importlib.util
 import hashlib
@@ -65,6 +65,10 @@ class SelectionConfig:
     confirm_borderline_depth: int | None = None
     confirm_borderline_win_cp: int | None = None
     confirm_borderline_gap_cp: int | None = None
+    rescreen_depth: int | None = None
+    rescreen_multipv: int | None = None
+    rescreen_min_gap_cp: int = 80
+    rescreen_margin_cp: int = 120
     profile_jsonl: Path | None = None
     eval_context: str = "root"
 
@@ -97,7 +101,11 @@ def select_tactics(
     selections: list[Selection] = []
     seen_motifs: set[tuple[str, str, str]] = set()
     skip_until_ply = -1
+    current_site: str | None = None
     for position in positions:
+        if position.site != current_site:
+            current_site = position.site
+            skip_until_ply = -1
         if position.ply <= skip_until_ply:
             continue
         if config.skip_standard_positions and not _has_schess_material(position.fen):
@@ -107,6 +115,18 @@ def select_tactics(
             continue
         evals = evaluate_position(position, engine, config)
         selection = classify_position(position, evals, config)
+        if selection is None and _needs_rescreen(position, evals, config):
+            rescreen_config = _rescreen_config(config)
+            selection = classify_position(position, evaluate_position(position, engine, rescreen_config), rescreen_config)
+            if selection:
+                selection = Selection(
+                    selection.position,
+                    selection.kind,
+                    selection.best,
+                    selection.second,
+                    f"{selection.reason}; rescreened at depth {rescreen_config.depth}",
+                    selection.flags,
+                )
         if selection:
             selection = confirm_selection(selection, engine, config)
             if selection is None:
@@ -432,6 +452,42 @@ def find_forcing_replies(
     selected = candidates[: max(1, limit or len(candidates))]
     return [(check_penalty, reply, solver_move) for check_penalty, _, reply, solver_move in selected]
 
+
+def _rescreen_config(config: SelectionConfig) -> SelectionConfig:
+    return replace(
+        config,
+        depth=config.rescreen_depth or config.depth,
+        multipv=config.rescreen_multipv or config.multipv,
+        rescreen_depth=None,
+        rescreen_multipv=None,
+        eval_context="rescreen",
+    )
+
+
+def _needs_rescreen(position: PositionRecord, evals: list[MoveEval], config: SelectionConfig) -> bool:
+    if not config.rescreen_depth or config.rescreen_depth <= config.depth:
+        return False
+    if len(evals) < 2:
+        return False
+    best = evals[0]
+    second = evals[1]
+    gap = best.score_cp - second.score_cp
+    if gap < config.rescreen_min_gap_cp:
+        return False
+
+    margin = config.rescreen_margin_cp
+    near_winning = best.score_cp >= config.win_cp - margin and second.score_cp < config.win_cp + margin
+    near_drawing = best.score_cp >= config.draw_floor_cp - margin and second.score_cp <= config.losing_cp + margin
+    forcing = "+" in best.san or "#" in best.san or _is_capture_san(best.san)
+    if near_winning or near_drawing:
+        return True
+    if forcing and best.score_cp >= config.draw_floor_cp - margin and second.score_cp <= config.win_cp + margin:
+        return True
+    return False
+
+
+def _is_capture_san(san: str) -> bool:
+    return "x" in san
 def classify_position(
     position: PositionRecord,
     evals: list[MoveEval],
