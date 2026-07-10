@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>S-Chess Tactics</title>
-  <link rel="stylesheet" href="styles.css?v=20260705-filters">
+  <link rel="stylesheet" href="styles.css?v=20260710-curated-levels">
 </head>
 <body>
   <main class="app">
@@ -17,6 +17,17 @@
       </div>
     </section>
     <aside class="panel">
+      <nav class="puzzle-set-tabs" aria-label="Puzzle set">
+        <button id="set-full" class="active" type="button">Full Puzzle Set</button>
+        <button id="set-curated" type="button">Curated Set <span>BETA</span></button>
+      </nav>
+      <div id="curated-levels" class="curated-levels hidden" aria-label="Curated difficulty">
+        <button data-curated-level="beginner" type="button">Beginner</button>
+        <button data-curated-level="lower-intermediate" type="button">Lower Intermediate</button>
+        <button data-curated-level="upper-intermediate" type="button">Upper Intermediate</button>
+        <button data-curated-level="advanced" type="button">Advanced</button>
+        <button data-curated-level="expert" type="button">Expert</button>
+      </div>
       <header class="panel-head">
         <div>
           <p id="counter" class="counter">0 / 0</p>
@@ -36,10 +47,12 @@
       </div>
 
       <div class="filters">
-        <label><input id="show-hidden" type="checkbox"> Show hidden-by-default</label>
-        <div id="hidden-options" class="subfilters hidden">
+        <div id="standard-filters" class="standard-filters">
+          <label><input id="show-hidden" type="checkbox"> Show hidden-by-default</label>
+          <div id="hidden-options" class="subfilters hidden">
           <label><input id="show-check" type="checkbox" checked> Check evasions</label>
           <label><input id="show-recapture" type="checkbox" checked> Recaptures</label>
+          </div>
         </div>
         <label>Board theme <select id="board-theme">
           <option value="wood">Wood</option>
@@ -62,6 +75,9 @@
             <label>Length <select id="length-filter"><option value="">All</option></select></label>
             <div id="length-detail" class="detail-options hidden"></div>
           </div>
+          <div class="category-row">
+            <label>Source <select id="source-filter"><option value="">All</option></select></label>
+          </div>
         </div>
       </div>
 
@@ -71,12 +87,23 @@
 
       <button id="reveal" class="primary">Reveal solution</button>
       <a id="analysis" class="analysis-link hidden" target="_blank" rel="noopener">Analyze on pychess</a>
+      <button id="mate-playout" class="secondary hidden" type="button">Play out fastest checkmate yourself</button>
       <section id="solution" class="solution hidden">
         <p id="line"></p>
         <p id="details"></p>
       </section>
+
+      <section class="suggestion-box">
+        <button id="suggest-toggle" class="secondary" type="button">Suggest puzzle</button>
+        <div id="suggest-panel" class="suggest-panel hidden">
+          <label>FEN <textarea id="suggest-fen" rows="3" spellcheck="false" placeholder="Paste a Seirawan FEN"></textarea></label>
+          <label>Notes <textarea id="suggest-notes" rows="3" placeholder="Optional: solution idea, source, or why it is interesting"></textarea></label>
+          <button id="suggest-submit" type="button">Send suggestion</button>
+          <p id="suggest-status" class="suggest-status"></p>
+        </div>
+      </section>
     </aside>
   </main>
-  <script src="app.js?v=20260705-filters"></script>
+  <script src="app.js?v=20260710-curated-levels"></script>
 </body>
 </html>

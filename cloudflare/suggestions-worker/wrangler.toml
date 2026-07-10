@@ -1,0 +1,9 @@
+name = "schess-puzzle-suggestions"
+main = "src/worker.js"
+compatibility_date = "2026-07-10"
+
+# After creating the D1 database, replace the placeholder database_id.
+[[d1_databases]]
+binding = "DB"
+database_name = "schess-puzzle-suggestions"
+database_id = "50175d2b-ea51-4b12-b12c-46be253766cb"

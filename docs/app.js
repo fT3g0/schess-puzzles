@@ -14,10 +14,26 @@ const state = {
   gatingSquares: new Set(),
   epSquare: "",
   openDetailFilter: "",
+  matePlayOut: false,
+  activeBaseSide: "",
+  randomizeInitialPuzzle: false,
+  puzzleSet: "full",
+  curatedLevel: "beginner",
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const hiddenTags = new Set(["standard-like", "trivial-recapture", "trivial-capture", "check-evasion", "manual-reject", "failed-reverify"]);
+const defaultExcludedMotifs = new Set(["equality", "defensive-move"]);
+const curatedLevels = {
+  beginner: ["gnx85", "dkcpr", "cdkuv", "2ph2z"],
+  "lower-intermediate": ["6rttj", "y37mv", "ue8pk", "sq7hh", "qngev", "ytxms"],
+  "upper-intermediate": ["7x6sd", "xfgsk", "xhayk", "tphna"],
+  advanced: ["qqn6r", "z8bt4", "d33pe"],
+  expert: [],
+};
+const curatedPuzzleIds = new Set(Object.values(curatedLevels).flat());
+const suggestionStorageKey = "schess-puzzle-suggestions";
+const suggestionApiUrl = "https://schess-puzzle-suggestions.ft3g0.workers.dev/suggestions";
 const boardEl = document.getElementById("board");
 const counterEl = document.getElementById("counter");
 const titleEl = document.getElementById("title");
@@ -38,8 +54,13 @@ const controls = {
   reveal: document.getElementById("reveal"),
   theme: document.getElementById("theme"),
   analysis: document.getElementById("analysis"),
+  matePlayOut: document.getElementById("mate-playout"),
+  setFull: document.getElementById("set-full"),
+  setCurated: document.getElementById("set-curated"),
+  curatedLevels: document.getElementById("curated-levels"),
   showHidden: document.getElementById("show-hidden"),
   hiddenOptions: document.getElementById("hidden-options"),
+  standardFilters: document.getElementById("standard-filters"),
   showCheck: document.getElementById("show-check"),
   showRecapture: document.getElementById("show-recapture"),
   phase: document.getElementById("phase-filter"),
@@ -48,9 +69,16 @@ const controls = {
   motifDetail: document.getElementById("motif-detail"),
   length: document.getElementById("length-filter"),
   lengthDetail: document.getElementById("length-detail"),
+  source: document.getElementById("source-filter"),
   categoryToggle: document.getElementById("category-toggle"),
   categoryOptions: document.getElementById("category-options"),
   boardTheme: document.getElementById("board-theme"),
+  suggestToggle: document.getElementById("suggest-toggle"),
+  suggestPanel: document.getElementById("suggest-panel"),
+  suggestFen: document.getElementById("suggest-fen"),
+  suggestNotes: document.getElementById("suggest-notes"),
+  suggestSubmit: document.getElementById("suggest-submit"),
+  suggestStatus: document.getElementById("suggest-status"),
 };
 
 async function boot() {
@@ -62,6 +90,7 @@ async function boot() {
     const payload = await response.json();
     state.puzzles = (payload.puzzles || []).map(enrichPuzzle);
     state.requestedPuzzleId = puzzleIdFromUrl();
+    state.randomizeInitialPuzzle = !state.requestedPuzzleId;
     populateCategoryFilters();
     bindControls();
     applyFilters();
@@ -77,12 +106,22 @@ function bindControls() {
   controls.unmoved.addEventListener("click", toggleUnmovedPieces);
   controls.random.addEventListener("click", () => gotoPuzzle(Math.floor(Math.random() * state.filtered.length)));
   controls.reveal.addEventListener("click", revealSolution);
+  controls.matePlayOut.addEventListener("click", startMatePlayOut);
   controls.theme.addEventListener("click", toggleTheme);
   controls.categoryToggle.addEventListener("click", toggleCategoryFilters);
+  controls.setFull.addEventListener("click", () => setPuzzleSet("full"));
+  controls.setCurated.addEventListener("click", () => setPuzzleSet("curated"));
+  controls.curatedLevels.querySelectorAll("[data-curated-level]").forEach((button) => {
+    button.addEventListener("click", () => setCuratedLevel(button.dataset.curatedLevel));
+  });
   controls.boardTheme.addEventListener("change", () => applyBoardTheme(controls.boardTheme.value));
+  if (controls.suggestToggle && controls.suggestSubmit) {
+    controls.suggestToggle.addEventListener("click", toggleSuggestionPanel);
+    controls.suggestSubmit.addEventListener("click", submitSuggestion);
+  }
   document.addEventListener("keydown", onKeyDown);
   document.addEventListener("click", onDocumentClick);
-  for (const input of [controls.showHidden, controls.showCheck, controls.showRecapture, controls.phase, controls.motif, controls.length]) {
+  for (const input of [controls.showHidden, controls.showCheck, controls.showRecapture, controls.phase, controls.motif, controls.length, controls.source]) {
     input.addEventListener("change", onFilterControlChanged);
   }
   for (const select of [controls.phase, controls.motif, controls.length]) {
@@ -103,6 +142,7 @@ function enrichPuzzle(puzzle) {
       phase: categories.phase || inferPhase(puzzle),
       motifs: categories.motifs || inferMotifs(puzzle),
       length: categories.length || inferLength(puzzle),
+      source: categories.source || inferSource(puzzle),
     },
   };
 }
@@ -111,14 +151,31 @@ function populateCategoryFilters() {
   const phases = [...new Set(state.puzzles.map((p) => p.categories.phase).filter(Boolean))];
   const motifs = [...new Set(state.puzzles.flatMap((p) => p.categories.motifs || []))];
   const lengths = [...new Set(state.puzzles.map((p) => p.categories.length).filter(Boolean))];
+  const sources = [...new Set(state.puzzles.map((p) => p.categories.source).filter(Boolean))];
   fillSelect(controls.phase, phases, ["opening", "middlegame", "endgame"], "All", true);
   fillSelect(controls.motif, motifs, [], "All", true);
   fillSelect(controls.length, lengths, ["one-move", "medium", "long"], "All", true);
+  fillSelect(controls.source, sources, ["human-game", "engine-selfplay", "manual-suggestion"], "All", false);
   fillDetailOptions(controls.phaseDetail, phases, ["opening", "middlegame", "endgame"], "phase");
   fillDetailOptions(controls.motifDetail, motifs, [], "motif");
   fillDetailOptions(controls.lengthDetail, lengths, ["one-move", "medium", "long"], "length");
+  applyMainstreamDefaultFilters();
 }
 
+function applyMainstreamDefaultFilters() {
+  controls.length.value = "__detail";
+  setDetailChecked(controls.lengthDetail, "one-move", false);
+  controls.motif.value = "__detail";
+  for (const motif of defaultExcludedMotifs) setDetailChecked(controls.motifDetail, motif, false);
+  state.openDetailFilter = "";
+  updateDetailFilterVisibility();
+}
+
+function setDetailChecked(container, value, checked) {
+  if (!container) return;
+  const input = [...container.querySelectorAll('input[type="checkbox"]')].find((box) => box.value === value);
+  if (input) input.checked = checked;
+}
 function fillSelect(select, values, preferred = [], emptyLabel = "All", includeDetailed = false) {
   const current = select.value;
   const ordered = [...preferred.filter((value) => values.includes(value)), ...values.filter((value) => !preferred.includes(value)).sort()];
@@ -235,13 +292,48 @@ function resetDetailChecks(container, checked) {
 function checkedDetailValues(container) {
   return new Set([...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value));
 }
+function setPuzzleSet(setName) {
+  state.puzzleSet = setName === "curated" ? "curated" : "full";
+  state.index = 0;
+  state.randomizeInitialPuzzle = !state.requestedPuzzleId;
+  applyFilters();
+}
+
+function setCuratedLevel(level) {
+  state.curatedLevel = Object.hasOwn(curatedLevels, level) ? level : "beginner";
+  state.index = 0;
+  state.randomizeInitialPuzzle = !state.requestedPuzzleId;
+  applyFilters();
+}
+
+function updatePuzzleSetTabs() {
+  controls.setFull.classList.toggle("active", state.puzzleSet === "full");
+  controls.setCurated.classList.toggle("active", state.puzzleSet === "curated");
+  controls.curatedLevels.classList.toggle("hidden", state.puzzleSet !== "curated");
+  controls.standardFilters.classList.toggle("hidden", state.puzzleSet === "curated");
+  controls.categoryToggle.classList.toggle("hidden", state.puzzleSet === "curated");
+  if (state.puzzleSet === "curated") controls.categoryOptions.classList.add("hidden");
+  updateCuratedLevelTabs();
+}
+
+function updateCuratedLevelTabs() {
+  controls.curatedLevels.querySelectorAll("[data-curated-level]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.curatedLevel === state.curatedLevel);
+  });
+}
+
 function applyFilters() {
   controls.hiddenOptions.classList.toggle("hidden", !controls.showHidden.checked);
   updateDetailFilterVisibility();
+  updatePuzzleSetTabs();
   const phaseSet = checkedDetailValues(controls.phaseDetail);
   const motifSet = checkedDetailValues(controls.motifDetail);
   const lengthSet = checkedDetailValues(controls.lengthDetail);
   state.filtered = state.puzzles.filter((puzzle) => {
+    if (state.puzzleSet === "curated") {
+      if (!(curatedLevels[state.curatedLevel] || []).includes(puzzle.id)) return false;
+      return true;
+    }
     const tags = new Set(puzzle.tags || []);
     const motifs = new Set(puzzle.categories.motifs || []);
     if (!controls.showHidden.checked && puzzle.hidden_by_default) return false;
@@ -268,6 +360,10 @@ function applyFilters() {
       return false;
     }
 
+    if (controls.source.value && puzzle.categories.source !== controls.source.value) {
+      return false;
+    }
+
     return true;
   });
   const requested = state.requestedPuzzleId ? state.puzzles.find((puzzle) => puzzle.id === state.requestedPuzzleId) : null;
@@ -280,6 +376,9 @@ function applyFilters() {
       state.index = 0;
     }
     state.requestedPuzzleId = "";
+  } else if (state.randomizeInitialPuzzle && state.filtered.length) {
+    state.index = Math.floor(Math.random() * state.filtered.length);
+    state.randomizeInitialPuzzle = false;
   } else {
     state.index = Math.min(state.index, Math.max(0, state.filtered.length - 1));
   }
@@ -325,6 +424,7 @@ function resetPuzzle() {
     sourceEl.textContent = "";
     solutionEl.classList.add("hidden");
     controls.analysis.classList.add("hidden");
+    controls.matePlayOut.classList.add("hidden");
     clearMoveChoices();
     setStatus("No puzzles match the current filters.", "bad");
     return;
@@ -339,6 +439,9 @@ function resetPuzzle() {
   state.epSquare = epSquareFromFen(puzzle.fen);
   solutionEl.classList.add("hidden");
   controls.analysis.classList.add("hidden");
+  controls.matePlayOut.classList.add("hidden");
+  state.matePlayOut = false;
+  state.activeBaseSide = puzzle.side || sideFromFen(puzzle.fen) || "w";
   counterEl.textContent = `${state.index + 1} / ${state.filtered.length}${puzzle.id ? `, ID: ${puzzle.id}` : ""}`;
   titleEl.textContent = `${puzzle.side === "b" ? "Black" : "White"} to move`;
   sourceEl.textContent = sourceText(puzzle);
@@ -638,7 +741,7 @@ function onSquare(square) {
 
 function tryUserMove(from, to) {
   const puzzle = currentPuzzle();
-  const expected = (puzzle.solution || [])[state.ply];
+  const expected = activeLine()[state.ply];
   state.selected = null;
   clearMoveChoices();
   if (!expected) return;
@@ -661,7 +764,7 @@ function tryUserMove(from, to) {
 
   if (!matchesExpectedPrefix) {
     setBoardFeedback("bad");
-    setStatus("That is not the tactic move.", "bad");
+    setStatus(state.matePlayOut ? "That is not the fastest checkmate line." : "That is not the tactic move.", "bad");
     renderBoard();
     return;
   }
@@ -678,7 +781,7 @@ function tryUserMove(from, to) {
 
 function submitUserMove(move) {
   const puzzle = currentPuzzle();
-  const expected = (puzzle.solution || [])[state.ply];
+  const expected = activeLine()[state.ply];
   const from = move.slice(0, 2);
   const to = move.slice(2, 4);
   const suffix = expectedSuffix(move);
@@ -693,7 +796,7 @@ function submitUserMove(move) {
   clearMoveChoices();
   if (!moveMatchesExpected(move, expected)) {
     setBoardFeedback("bad");
-    setStatus("That is not the tactic move.", "bad");
+    setStatus(state.matePlayOut ? "That is not the fastest checkmate line." : "That is not the tactic move.", "bad");
     renderBoard();
     return;
   }
@@ -737,7 +840,7 @@ function expectedSuffix(move) {
 
 function currentSideToMove() {
   const puzzle = currentPuzzle();
-  const initial = puzzle?.side || sideFromFen(puzzle?.fen || "") || "w";
+  const initial = state.activeBaseSide || puzzle?.side || sideFromFen(puzzle?.fen || "") || "w";
   return state.ply % 2 === 0 ? initial : oppositeSide(initial);
 }
 
@@ -1032,9 +1135,9 @@ function choosePendingSuffix(suffix) {
 function autoReplies() {
   const puzzle = currentPuzzle();
   if (!puzzle) return;
-  const line = puzzle.solution || [];
+  const line = activeLine();
   if (state.ply >= line.length) {
-    markSolved();
+    finishActiveLine();
     return;
   }
   if (state.ply % 2 === 1) {
@@ -1043,11 +1146,77 @@ function autoReplies() {
     state.ply += 1;
     renderBoard();
     if (state.ply >= line.length) {
-      markSolved();
+      finishActiveLine();
     } else {
       setStatus("Continue the line.");
     }
   }
+}
+
+
+function activeLine() {
+  const puzzle = currentPuzzle();
+  if (!puzzle) return [];
+  return state.matePlayOut ? (puzzle.mate_line || []) : (puzzle.solution || []);
+}
+
+function finishActiveLine() {
+  if (state.matePlayOut) {
+    state.solved = true;
+    setBoardFeedback("good");
+    setStatus("Checkmate complete.", "good");
+    showAnalysisLink();
+    return;
+  }
+  markSolved();
+}
+
+function showMatePlayOutButton() {
+  const puzzle = currentPuzzle();
+  if (!puzzle || !(puzzle.mate_line || []).length || !puzzle.mate_start_fen || state.matePlayOut) return;
+  controls.matePlayOut.classList.remove("hidden");
+}
+
+function startMatePlayOut() {
+  const puzzle = currentPuzzle();
+  if (!puzzle || !(puzzle.mate_line || []).length || !puzzle.mate_start_fen) return;
+  const startFen = puzzle.mate_start_fen;
+  state.board = parseFenBoard(startFen);
+  state.orientation = puzzle.side || sideFromFen(puzzle.fen) || "w";
+  state.selected = null;
+  state.ply = 0;
+  state.solved = false;
+  state.matePlayOut = true;
+  state.pocket = pocketFromFen(startFen);
+  state.gatingSquares = gatingOptionSquaresFromFen(startFen);
+  state.epSquare = epSquareFromFen(startFen);
+  state.activeBaseSide = sideFromFen(startFen) || puzzle.side || "w";
+  clearMoveChoices();
+  controls.matePlayOut.classList.add("hidden");
+  setBoardFeedback("");
+  setStatus("Play the fastest checkmate line.");
+  renderReserve();
+  renderBoard();
+  autoStartMateDefense();
+}
+
+
+function autoStartMateDefense() {
+  const puzzle = currentPuzzle();
+  const line = puzzle?.mate_line || [];
+  if (!state.matePlayOut || !line.length) return;
+  if (currentSideToMove() === puzzle.side) return;
+  applyMove(line[state.ply]);
+  renderReserve();
+  state.ply += 1;
+  renderBoard();
+  setStatus("Find the fastest checkmate continuation.");
+}
+
+function bonusMateAlternativeMatches(userPrefix) {
+  const puzzle = currentPuzzle();
+  if (!state.matePlayOut || !puzzle || currentSideToMove() !== puzzle.side) return false;
+  return (puzzle.mate_alternative_first_moves || []).some((move) => moveMatchesPrefix(move.uci || "", userPrefix));
 }
 
 function markSolved() {
@@ -1055,6 +1224,7 @@ function markSolved() {
   setBoardFeedback("good");
   setStatus("Solved.", "good");
   showAnalysisLink();
+  showMatePlayOutButton();
 }
 
 function applyMove(uci) {
@@ -1144,6 +1314,7 @@ function revealSolution() {
   const puzzle = currentPuzzle();
   if (!puzzle) return;
   solutionEl.classList.remove("hidden");
+  showMatePlayOutButton();
   const scores = puzzle.scores || {};
   const categories = puzzleCategoryLabels(puzzle);
   const line = puzzle.solution_line_san || (puzzle.solution || []).join(" ");
@@ -1163,7 +1334,7 @@ function revealSolution() {
 
 function puzzleCategoryLabels(puzzle) {
   const cats = puzzle.categories || {};
-  return [cats.phase, cats.length, ...(cats.motifs || [])].filter(Boolean).map(labelText);
+  return [cats.phase, cats.length, cats.source, ...(cats.motifs || [])].filter(Boolean).map(labelText);
 }
 
 function escapeHtml(value) {
@@ -1231,6 +1402,13 @@ function inferLength(puzzle) {
   return "long";
 }
 
+function inferSource(puzzle) {
+  const source = String(puzzle.source_url || "").toLowerCase();
+  if (source.includes("chess.com") || source.includes("pychess.org")) return "human-game";
+  if (source.includes("selfplay") || source.includes("local-selfplay")) return "engine-selfplay";
+  return "manual-suggestion";
+}
+
 function inferMotifs(puzzle) {
   const tags = new Set(puzzle.tags || []);
   const motifs = new Set();
@@ -1263,7 +1441,7 @@ function scoreMotif(puzzle) {
 function categorySummary(puzzle) {
   const cats = puzzle.categories || {};
   const motifs = (cats.motifs || []).map(labelText).join(", ");
-  return `Categories: ${labelText(cats.phase)}, ${labelText(cats.length)}${motifs ? `, ${motifs}` : ""}. `;
+  return `Categories: ${labelText(cats.phase)}, ${labelText(cats.length)}, ${labelText(cats.source)}${motifs ? `, ${motifs}` : ""}. `;
 }
 
 function labelText(value) {
@@ -1274,6 +1452,84 @@ function labelText(value) {
     .join(" ");
 }
 
+function toggleSuggestionPanel() {
+  controls.suggestPanel.classList.toggle("hidden");
+  if (!controls.suggestPanel.classList.contains("hidden")) controls.suggestFen.focus();
+}
+
+async function submitSuggestion() {
+  const fen = controls.suggestFen.value.trim();
+  const notes = controls.suggestNotes.value.trim();
+  if (!fen) {
+    setSuggestionStatus("Please enter a FEN first.", "bad");
+    return;
+  }
+  if (!looksLikeFen(fen)) {
+    setSuggestionStatus("This does not look like a full FEN yet.", "bad");
+    return;
+  }
+  const suggestion = {
+    fen,
+    notes,
+    page: window.location.href,
+    website: "",
+    created_at: new Date().toISOString(),
+  };
+  controls.suggestSubmit.disabled = true;
+  setSuggestionStatus("Sending suggestion...", "");
+  try {
+    const response = await fetch(suggestionApiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(suggestion),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const suggestions = readSuggestions();
+    suggestions.push({ ...suggestion, remote_id: payload.id });
+    localStorage.setItem(suggestionStorageKey, JSON.stringify(suggestions));
+    setSuggestionStatus("Suggestion sent. Thank you!", "good");
+    controls.suggestFen.value = "";
+    controls.suggestNotes.value = "";
+  } catch (error) {
+    setSuggestionStatus(`Could not send suggestion: ${error.message}`, "bad");
+  } finally {
+    controls.suggestSubmit.disabled = false;
+  }
+}
+
+function looksLikeFen(fen) {
+  const fields = fen.split(/\s+/);
+  return fields.length >= 6 && fields[0].includes("/") && /^[wb]$/.test(fields[1]);
+}
+
+function readSuggestions() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(suggestionStorageKey) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function githubSuggestionUrl(suggestion) {
+  const body = [
+    "Suggested S-Chess puzzle candidate",
+    "",
+    `FEN: ${suggestion.fen}`,
+    "",
+    suggestion.notes ? `Notes: ${suggestion.notes}` : "Notes:",
+    "",
+    `Submitted from: ${suggestion.page}`,
+  ].join("\n");
+  const params = new URLSearchParams({ title: "Puzzle suggestion", body });
+  return `https://github.com/fT3g0/schess-puzzles/issues/new?${params.toString()}`;
+}
+
+function setSuggestionStatus(text, cls = "") {
+  controls.suggestStatus.textContent = text;
+  controls.suggestStatus.className = `suggest-status ${cls}`.trim();
+}
 function toggleCategoryFilters() {
   const hidden = controls.categoryOptions.classList.toggle("hidden");
   controls.categoryToggle.textContent = hidden ? "Filter by categories" : "Hide category filters";

@@ -1,4 +1,4 @@
-﻿# S-Chess Puzzle Generator
+# S-Chess Puzzle Generator
 
 Local-first tooling for generating and solving Seirawan chess / S-Chess tactics.
 
@@ -235,20 +235,24 @@ python -m schess_puzzles.cli select-batch --glob "data/raw/selfplay/*.pgn" --lim
 python -m schess_puzzles.cli review-html data\puzzles\selfplay_batch01_report.jsonl data\puzzles\selfplay_batch01_review.html
 ```
 
-For repeated batch generation, use the PowerShell helper instead of typing every
-selector/review command manually:
+For repeated self-play batch generation, use the PowerShell helper instead of
+typing every selector/review command manually:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\Generate-Batches.ps1 -ChessComStartBatch 50 -ChessComBatches 5 -Combine
 powershell -ExecutionPolicy Bypass -File .\tools\Generate-Batches.ps1 -SelfPlayStartBatch 8 -SelfPlayBatches 3
-powershell -ExecutionPolicy Bypass -File .\tools\Generate-Batches.ps1 -ChessComStartBatch 50 -ChessComBatches 5 -SelfPlayStartBatch 8 -SelfPlayBatches 2 -Combine
 ```
 
-Chess.com batch numbers map to raw-game offsets by `start_index = (batch - 1) *
-20`. Self-play keeps the level-1 style settings from the first useful run:
-depth 1, MultiPV 6, temperature 250cp, and 20% random blunders. It also lets
-the weaker side resign after a sustained losing eval by default:
-`-ResignCp 700 -ResignMoves 5`.
+For Chess.com growth, prefer `Run-ChessCom-Unattended.ps1` instead of manually
+setting a batch start. It tracks already analyzed PGN4 files in
+`data\puzzles\chesscom_processed_raw.txt` and automatically chooses the next
+batch number, which avoids duplicate/offset mistakes when newer games are added.
+`Generate-Batches.ps1 -ChessComStartBatch ...` is only a legacy/debug path for
+reproducing an old fixed raw-game offset.
+
+Self-play keeps the level-1 style settings from the first useful run: depth 1,
+MultiPV 6, temperature 250cp, and 20% random blunders. It also lets the weaker
+side resign after a sustained losing eval by default: `-ResignCp 700
+-ResignMoves 5`.
 
 The selector skips positions that have no hawk/elephant on the board or in
 reserve, because those are standard-chess tactics and are less useful for this
@@ -260,7 +264,7 @@ pages in chunks, skips already downloaded PGN4 files, processes every newly
 available batch, and writes a transcript under `logs/`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\Run-ChessCom-Unattended.ps1 -ArchiveStartPage 50 -ArchivePages 50 -ArchiveChunkPages 5 -DownloadDelay 1
+powershell -ExecutionPolicy Bypass -File .\tools\Run-ChessCom-Unattended.ps1 -ArchiveStartPage 50 -ArchivePages 50 -ArchiveChunkPages 5 -DownloadDelay 1 -BatchSize 10
 ```
 
 Stop it with `Ctrl+C` when needed. Already downloaded PGN4 files, completed

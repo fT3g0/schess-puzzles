@@ -26,6 +26,7 @@
     [int]$ResignMoves = 5,
     [int]$SeedBase = 2000,
     [int]$Workers = 1,
+    [int]$WorkerQueueMultiplier = 2,
     [switch]$Profile,
     [int]$StartBatchOverride = 0,
     [switch]$SkipInitialCombine,
@@ -266,96 +267,110 @@ if (-not $SkipInitialCombine) {
 $visible = Get-VisibleCount
 Write-Host "Visible puzzles before run: $visible / $TargetVisible"
 
+function Start-SelfPlayWorkerJob {
+    param([int]$BatchNumber)
+
+    $batchName = "selfplay_batch{0:D2}" -f $BatchNumber
+    Write-Host "Queueing $batchName"
+    $root = (Get-Location).Path
+    return Start-Job -Name $batchName -ScriptBlock {
+        param($Root, $BatchNumber, $Params)
+        Set-Location $Root
+        $args = @(
+            "-ExecutionPolicy", "Bypass", "-File", ".\tools\Grow-SelfPlayToTarget.ps1",
+            "-TargetVisible", "999999999",
+            "-MaxBatches", "1",
+            "-SelfPlayGames", "$($Params.SelfPlayGames)",
+            "-SelectorDepth", "$($Params.SelectorDepth)",
+            "-MultiPv", "$($Params.MultiPv)",
+            "-RescreenDepth", "$($Params.RescreenDepth)",
+            "-RescreenMultiPv", "$($Params.RescreenMultiPv)",
+            "-RescreenMinGapCp", "$($Params.RescreenMinGapCp)",
+            "-RescreenMarginCp", "$($Params.RescreenMarginCp)",
+            "-ConfirmDepth", "$($Params.ConfirmDepth)",
+            "-ConfirmMultiPv", "$($Params.ConfirmMultiPv)",
+            "-ConfirmFastDepth", "$($Params.ConfirmFastDepth)",
+            "-ConfirmClearGapCp", "$($Params.ConfirmClearGapCp)",
+            "-ConfirmClearMarginCp", "$($Params.ConfirmClearMarginCp)",
+            "-ConfirmBorderlineDepth", "$($Params.ConfirmBorderlineDepth)",
+            "-ConfirmBorderlineWinCp", "$($Params.ConfirmBorderlineWinCp)",
+            "-ConfirmBorderlineGapCp", "$($Params.ConfirmBorderlineGapCp)",
+            "-LineMaxPlies", "$($Params.LineMaxPlies)",
+            "-ExtensionBeamWidth", "$($Params.ExtensionBeamWidth)",
+            "-SelfPlayDepth", "$($Params.SelfPlayDepth)",
+            "-SelfPlayMaxPlies", "$($Params.SelfPlayMaxPlies)",
+            "-TemperatureCp", "$($Params.TemperatureCp)",
+            "-BlunderChance", "$($Params.BlunderChance)",
+            "-ResignCp", "$($Params.ResignCp)",
+            "-ResignMoves", "$($Params.ResignMoves)",
+            "-SeedBase", "$($Params.SeedBase)",
+            "-Workers", "1",
+            "-WorkerQueueMultiplier", "1",
+            "-StartBatchOverride", "$BatchNumber",
+            "-SkipInitialCombine",
+            "-WorkerMode"
+        )
+        if ($Params.Profile) { $args += "-Profile" }
+        & powershell @args
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } -ArgumentList $root, $BatchNumber, @{
+        SelfPlayGames=$SelfPlayGames; SelectorDepth=$SelectorDepth; MultiPv=$MultiPv; RescreenDepth=$RescreenDepth;
+        RescreenMultiPv=$RescreenMultiPv; RescreenMinGapCp=$RescreenMinGapCp; RescreenMarginCp=$RescreenMarginCp; ConfirmDepth=$ConfirmDepth;
+        ConfirmMultiPv=$ConfirmMultiPv; ConfirmFastDepth=$ConfirmFastDepth; ConfirmClearGapCp=$ConfirmClearGapCp;
+        ConfirmClearMarginCp=$ConfirmClearMarginCp; ConfirmBorderlineDepth=$ConfirmBorderlineDepth;
+        ConfirmBorderlineWinCp=$ConfirmBorderlineWinCp; ConfirmBorderlineGapCp=$ConfirmBorderlineGapCp;
+        LineMaxPlies=$LineMaxPlies; ExtensionBeamWidth=$ExtensionBeamWidth; SelfPlayDepth=$SelfPlayDepth;
+        SelfPlayMaxPlies=$SelfPlayMaxPlies; TemperatureCp=$TemperatureCp; BlunderChance=$BlunderChance;
+        ResignCp=$ResignCp; ResignMoves=$ResignMoves; SeedBase=$SeedBase; Profile=[bool]$Profile
+    }
+}
+
 $batchesRun = 0
 while ($visible -lt $TargetVisible -and $batchesRun -lt $MaxBatches) {
-    $waveSize = [Math]::Min([Math]::Max($Workers, 1), $MaxBatches - $batchesRun)
-    $jobs = @()
-
-    for ($i = 0; $i -lt $waveSize; $i++) {
+    if ($Workers -le 1) {
         $batch = Get-NextSelfPlayBatch
-        while ($jobs | Where-Object { $_.Name -eq ("selfplay_batch{0:D2}" -f $batch) }) {
-            $batch += 1
-        }
         $batchName = "selfplay_batch{0:D2}" -f $batch
-        $seedBaseForBatch = $SeedBase
+        Invoke-SelfPlayBatch -BatchName $batchName -BatchNumber $batch -Seed ($SeedBase + $batch)
+        $batchesRun += 1
+    } else {
+        $queueLimit = [Math]::Min([Math]::Max($Workers, 1) * [Math]::Max($WorkerQueueMultiplier, 1), $MaxBatches - $batchesRun)
+        $jobs = @()
+        $started = 0
+        $nextBatch = Get-NextSelfPlayBatch
+        Write-Host "Starting dynamic worker queue: workers=$Workers queued_batches=$queueLimit"
 
-        if ($Workers -le 1) {
-            Invoke-SelfPlayBatch -BatchName $batchName -BatchNumber $batch -Seed ($seedBaseForBatch + $batch)
-        } else {
-            Write-Host "Queueing $batchName"
-            $root = (Get-Location).Path
-            $job = Start-Job -Name $batchName -ScriptBlock {
-                param($Root, $BatchNumber, $Params)
-                Set-Location $Root
-                $args = @(
-                    "-ExecutionPolicy", "Bypass", "-File", ".\tools\Grow-SelfPlayToTarget.ps1",
-                    "-TargetVisible", "999999999",
-                    "-MaxBatches", "1",
-                    "-SelfPlayGames", "$($Params.SelfPlayGames)",
-                    "-SelectorDepth", "$($Params.SelectorDepth)",
-                    "-MultiPv", "$($Params.MultiPv)",
-                    "-RescreenDepth", "$($Params.RescreenDepth)",
-                    "-RescreenMultiPv", "$($Params.RescreenMultiPv)",
-                    "-RescreenMinGapCp", "$($Params.RescreenMinGapCp)",
-                    "-RescreenMarginCp", "$($Params.RescreenMarginCp)",
-                    "-ConfirmDepth", "$($Params.ConfirmDepth)",
-                    "-ConfirmMultiPv", "$($Params.ConfirmMultiPv)",
-                    "-ConfirmFastDepth", "$($Params.ConfirmFastDepth)",
-                    "-ConfirmClearGapCp", "$($Params.ConfirmClearGapCp)",
-                    "-ConfirmClearMarginCp", "$($Params.ConfirmClearMarginCp)",
-                    "-ConfirmBorderlineDepth", "$($Params.ConfirmBorderlineDepth)",
-                    "-ConfirmBorderlineWinCp", "$($Params.ConfirmBorderlineWinCp)",
-                    "-ConfirmBorderlineGapCp", "$($Params.ConfirmBorderlineGapCp)",
-                    "-LineMaxPlies", "$($Params.LineMaxPlies)",
-                    "-ExtensionBeamWidth", "$($Params.ExtensionBeamWidth)",
-                    "-SelfPlayDepth", "$($Params.SelfPlayDepth)",
-                    "-SelfPlayMaxPlies", "$($Params.SelfPlayMaxPlies)",
-                    "-TemperatureCp", "$($Params.TemperatureCp)",
-                    "-BlunderChance", "$($Params.BlunderChance)",
-                    "-ResignCp", "$($Params.ResignCp)",
-                    "-ResignMoves", "$($Params.ResignMoves)",
-                    "-SeedBase", "$($Params.SeedBase)",
-                    "-Workers", "1",
-                    "-StartBatchOverride", "$BatchNumber",
-                    "-SkipInitialCombine",
-                    "-WorkerMode"
-                )
-                if ($Params.Profile) { $args += "-Profile" }
-                & powershell @args
-                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            } -ArgumentList $root, $batch, @{
-                SelfPlayGames=$SelfPlayGames; SelectorDepth=$SelectorDepth; MultiPv=$MultiPv; RescreenDepth=$RescreenDepth;
-                RescreenMultiPv=$RescreenMultiPv; RescreenMinGapCp=$RescreenMinGapCp; RescreenMarginCp=$RescreenMarginCp; ConfirmDepth=$ConfirmDepth;
-                ConfirmMultiPv=$ConfirmMultiPv; ConfirmFastDepth=$ConfirmFastDepth; ConfirmClearGapCp=$ConfirmClearGapCp;
-                ConfirmClearMarginCp=$ConfirmClearMarginCp; ConfirmBorderlineDepth=$ConfirmBorderlineDepth;
-                ConfirmBorderlineWinCp=$ConfirmBorderlineWinCp; ConfirmBorderlineGapCp=$ConfirmBorderlineGapCp;
-                LineMaxPlies=$LineMaxPlies; ExtensionBeamWidth=$ExtensionBeamWidth; SelfPlayDepth=$SelfPlayDepth;
-                SelfPlayMaxPlies=$SelfPlayMaxPlies; TemperatureCp=$TemperatureCp; BlunderChance=$BlunderChance;
-                ResignCp=$ResignCp; ResignMoves=$ResignMoves; SeedBase=$SeedBase; Profile=[bool]$Profile
-            }
-            $jobs += $job
+        while ($started -lt $queueLimit -and $jobs.Count -lt $Workers) {
+            $jobs += Start-SelfPlayWorkerJob -BatchNumber $nextBatch
+            $nextBatch += 1
+            $started += 1
         }
-    }
 
-    if ($Workers -gt 1) {
-        Write-Host "Waiting for $($jobs.Count) worker(s)..."
-        Wait-Job -Job $jobs | Out-Null
         $failed = $false
-        foreach ($job in $jobs) {
+        while ($jobs.Count -gt 0) {
+            $finished = Wait-Job -Job $jobs -Any
             Write-Host ""
-            Write-Host "--- Worker $($job.Name) summary ---"
-            $workerOutput = Receive-Job -Job $job
+            Write-Host "--- Worker $($finished.Name) summary ---"
+            $workerErrors = @()
+            $workerOutput = Receive-Job -Job $finished -ErrorAction SilentlyContinue -ErrorVariable workerErrors
             Write-CondensedWorkerOutput -Lines $workerOutput
-            if ($job.State -ne "Completed") { $failed = $true }
-            Remove-Job -Job $job
+            foreach ($workerError in $workerErrors) { Write-Host $workerError }
+            if ($finished.State -ne "Completed") { $failed = $true }
+            Remove-Job -Job $finished
+            $jobs = @($jobs | Where-Object { $_.Id -ne $finished.Id })
+            $batchesRun += 1
+
+            if (-not $failed -and $started -lt $queueLimit) {
+                $jobs += Start-SelfPlayWorkerJob -BatchNumber $nextBatch
+                $nextBatch += 1
+                $started += 1
+            }
         }
         if ($failed) { throw "At least one worker failed." }
     }
 
     Update-CombinedArtifacts
     $visible = Get-VisibleCount
-    $batchesRun += $waveSize
-    Write-Host "Visible puzzles after wave: $visible / $TargetVisible"
+    Write-Host "Visible puzzles after worker queue: $visible / $TargetVisible"
 }
 
 Write-Host ""

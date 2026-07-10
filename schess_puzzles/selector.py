@@ -329,8 +329,11 @@ def _borderline_confirmation(
 
 def extend_selection(selection: Selection, engine, config: SelectionConfig) -> Selection:
     beam_width = max(1, config.extension_beam_width)
+    max_plies = config.max_plies
+    if selection.kind == "drawing":
+        max_plies = min(max_plies, 3)
     initial_line = [selection.best.move]
-    if len(initial_line) >= config.max_plies:
+    if len(initial_line) >= max_plies:
         return selection
 
     variant = selection.position.variant
@@ -342,7 +345,7 @@ def extend_selection(selection: Selection, engine, config: SelectionConfig) -> S
     while True:
         next_beam: list[tuple[list[str], str, int, int]] = []
         for line, current_fen, check_penalty_sum, score_sum in beam:
-            if len(line) + 2 > config.max_plies:
+            if len(line) + 2 > max_plies:
                 continue
             for check_penalty, opponent_move, solver_move in find_forcing_replies(variant, current_fen, selection.kind, engine, config, beam_width):
                 new_line = [*line, opponent_move, solver_move.move]
@@ -561,7 +564,13 @@ def _canonical_fen(fen: str) -> str:
 
 def _has_schess_material(fen: str) -> bool:
     board_and_pockets = fen.split()[0]
-    return any(piece in board_and_pockets for piece in "HEhe")
+    if any(piece in board_and_pockets for piece in "HEhe"):
+        return True
+    board = board_and_pockets.split("[", 1)[0]
+    ranks = board.split("/")
+    if len(ranks) != 8:
+        return False
+    return "P" in ranks[1] or "p" in ranks[6]
 
 
 def _score_to_cp(score: list[str]) -> int:

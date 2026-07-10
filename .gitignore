@@ -1,4 +1,4 @@
-﻿# Local configuration and credentials
+# Local configuration and credentials
 PRIVATE_COMMANDS.md
 config.toml
 cookies_env.txt
@@ -34,3 +34,5 @@ pychess-variants_*
 .idea/
 .DS_Store
 Thumbs.db
+.wrangler/
+cloudflare/**/.wrangler/

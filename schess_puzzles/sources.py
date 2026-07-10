@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import html
@@ -326,14 +326,24 @@ def discover_chesscom_variant_archive(
                             game_ids.append(str(game_nr))
                     got_archive_result = True
                     if data.get("lastPage"):
-                        return sorted(set(game_ids), key=int)
+                        return _unique_preserve_order(game_ids)
                     break
             if debug and not got_archive_result:
                 print(f"archive page {page} timed out after {archive_timeout}s without a result mutation")
-        return sorted(set(game_ids), key=int)
+        return _unique_preserve_order(game_ids)
     finally:
         ws.close()
 
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
 
 def _resolve_chesscom_variant_player_id(ws, username: str, window_id: str, debug: bool = False) -> int | None:
     _send_socket(ws, "autocomplete-username", {"username": username, "gameType": "", "queryType": "games"}, window_id)
