@@ -1,4 +1,4 @@
-﻿param(
+param(
     [int]$TargetVisible = 500,
     [int]$MaxBatches = 200,
     [int]$SelfPlayGames = 20,
@@ -129,6 +129,7 @@ function Get-VisibleCount {
         "standard-like" = $true
         "trivial-recapture" = $true
         "trivial-capture" = $true
+        "trivial-capture-cleanup" = $true
         "check-evasion" = $true
         "manual-reject" = $true
         "failed-reverify" = $true
@@ -165,6 +166,7 @@ function Update-CombinedArtifacts {
     Invoke-Python (@("-m", "schess_puzzles.cli", "combine-reports") + $reports + @("--glob", "data/puzzles/selfplay_batch*_report.jsonl", "--output", $tmp))
     Move-Item -Force -Path $tmp -Destination "data\puzzles\all_report.jsonl"
     Invoke-Python @("-m", "schess_puzzles.cli", "review-html", "data\puzzles\all_report.jsonl", "data\puzzles\all_review.html")
+    Invoke-Python @("-m", "schess_puzzles.cli", "enrich-mate-lines", "data\puzzles\all_report.jsonl", "--depth", "20", "--multipv", "5")
     Invoke-Python @("-m", "schess_puzzles.cli", "export-web", "data\puzzles\all_report.jsonl", "web\public\puzzles.json")
 
     powershell -ExecutionPolicy Bypass -File ".\tools\Publish-WebToDocs.ps1"

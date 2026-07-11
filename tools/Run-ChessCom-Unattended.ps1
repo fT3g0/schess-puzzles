@@ -539,6 +539,12 @@ try {
             "data\puzzles\all_review.html"
         )
         Invoke-Step @(
+            "-m", "schess_puzzles.cli", "enrich-mate-lines",
+            "data\puzzles\all_report.jsonl",
+            "--depth", "20",
+            "--multipv", "5"
+        )
+        Invoke-Step @(
             "-m", "schess_puzzles.cli", "export-web",
             "data\puzzles\all_report.jsonl",
             "web\public\puzzles.json"

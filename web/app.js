@@ -22,14 +22,14 @@ const state = {
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
-const hiddenTags = new Set(["standard-like", "trivial-recapture", "trivial-capture", "check-evasion", "manual-reject", "failed-reverify"]);
+const hiddenTags = new Set(["standard-like", "trivial-recapture", "trivial-capture", "trivial-capture-cleanup", "check-evasion", "manual-reject", "failed-reverify"]);
 const defaultExcludedMotifs = new Set(["equality", "defensive-move"]);
 const curatedLevels = {
   beginner: ["gnx85", "dkcpr", "cdkuv", "2ph2z"],
-  "lower-intermediate": ["6rttj", "y37mv", "ue8pk", "sq7hh", "qngev", "ytxms"],
-  "upper-intermediate": ["7x6sd", "xfgsk", "xhayk", "tphna"],
-  advanced: ["qqn6r", "z8bt4", "d33pe"],
-  expert: [],
+  "lower-intermediate": ["6rttj", "y37mv", "ue8pk", "sq7hh", "qngev", "ytxms", "m2czc", "j8qev"],
+  "upper-intermediate": ["7x6sd", "xfgsk", "xhayk", "tphna", "4mtrc"],
+  advanced: ["qqn6r", "d33pe", "pchym", "vp2na", "kwehk"],
+  expert: ["yqg68", "j5jur"],
 };
 const curatedPuzzleIds = new Set(Object.values(curatedLevels).flat());
 const suggestionStorageKey = "schess-puzzle-suggestions";
@@ -750,10 +750,10 @@ function tryUserMove(from, to) {
   const matchesExpectedPrefix = moveMatchesPrefix(expected, userPrefix);
   const choices = matchesExpectedPrefix ? moveChoices(from, to, expected) : [];
   const suffixes = choices.length ? choices.map(([suffix]) => suffix) : [""];
-  const hasLegalSuffix = suffixes.some((suffix) => isLegalUserMove(from, to, suffix));
+  const hasLegalSuffix = matchesExpectedPrefix || suffixes.some((suffix) => isLegalUserMove(from, to, suffix));
   if (!hasLegalSuffix) {
     const side = currentSideToMove();
-    const plausibleWrongMove = !matchesExpectedPrefix && isPseudoLegalMove(from, to) && !kingInCheck(state.board, side);
+    const plausibleWrongMove = !legalMovesForCurrentState() && !matchesExpectedPrefix && isPseudoLegalMove(from, to) && !kingInCheck(state.board, side);
     if (!plausibleWrongMove) {
       setBoardFeedback("");
       setStatus("Illegal move.");
@@ -785,7 +785,7 @@ function submitUserMove(move) {
   const from = move.slice(0, 2);
   const to = move.slice(2, 4);
   const suffix = expectedSuffix(move);
-  if (!isLegalUserMove(from, to, suffix)) {
+  if (!moveMatchesExpected(move, expected) && !isLegalUserMove(from, to, suffix)) {
     clearMoveChoices();
     setBoardFeedback("");
     setStatus("Illegal move.");
@@ -852,7 +852,17 @@ function pieceColor(piece) {
   return piece === piece.toUpperCase() ? "w" : "b";
 }
 
+function legalMovesForCurrentState() {
+  const puzzle = currentPuzzle();
+  if (state.matePlayOut) return null;
+  const states = puzzle?.legal_moves;
+  return Array.isArray(states?.[state.ply]) ? states[state.ply] : null;
+}
+
 function isLegalUserMove(from, to, suffix = "") {
+  const engineMoves = legalMovesForCurrentState();
+  const move = `${from}${to}${suffix}`;
+  if (engineMoves) return engineMoves.some((legal) => moveMatchesExpected(move, legal));
   if (!isPseudoLegalMove(from, to)) return false;
   const piece = state.board[from];
   const side = pieceColor(piece);
@@ -860,7 +870,6 @@ function isLegalUserMove(from, to, suffix = "") {
   if (!nextBoard) return false;
   return !kingInCheck(nextBoard, side);
 }
-
 function boardAfterMove(board, from, to, suffix, piece) {
   const next = { ...board };
   const castle = castleMove(from, to, piece, suffix || "");
@@ -1445,6 +1454,10 @@ function categorySummary(puzzle) {
 }
 
 function labelText(value) {
+  const labels = {
+    "perpetual-check": "Perpetual Check / Threefold",
+  };
+  if (labels[value]) return labels[value];
   return String(value || "")
     .split("-")
     .filter(Boolean)

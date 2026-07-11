@@ -1975,7 +1975,7 @@ def _reverify_report(config_path: Path, args: argparse.Namespace) -> None:
 
     output_report = args.output_report or args.input_report
     config = load_config(config_path)
-    hidden_flags = {"standard-like", "trivial-recapture", "trivial-capture", "check-evasion", "manual-reject", "failed-reverify"}
+    hidden_flags = {"standard-like", "trivial-recapture", "trivial-capture", "trivial-capture-cleanup", "check-evasion", "manual-reject", "failed-reverify"}
     kinds = set(args.kind or [])
     selector_config = SelectionConfig(
         depth=args.depth,
@@ -2364,13 +2364,13 @@ def _combine_reports(reports: list[Path], glob_pattern: str | None, output: Path
     print(f"Wrote {output} with {len(records)} tactic(s) from {len(inputs)} report file(s)")
 
 def _export_web(report_jsonl: Path, output_json: Path) -> None:
-    hidden_flags = {"standard-like", "trivial-recapture", "trivial-capture", "check-evasion", "manual-reject", "failed-reverify"}
+    hidden_flags = {"standard-like", "trivial-recapture", "trivial-capture", "trivial-capture-cleanup", "check-evasion", "manual-reject", "failed-reverify"}
     puzzles = []
     with report_jsonl.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
                 continue
-            record = _enrich_report_record(json.loads(line))
+            record = json.loads(line)
             flags = record.get("flags", [])
             solution_line_san = _web_line_san(record)
             mate_line = _web_mate_line(record)
@@ -2385,6 +2385,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
                     "move_number": record.get("move_number"),
                     "kind": record.get("kind"),
                     "solution": record.get("line", []),
+                    "legal_moves": _web_legal_moves(record),
                     "solution_san": record.get("best_san"),
                     "solution_line_san": solution_line_san,
                     "mate_line": mate_line,
@@ -2539,6 +2540,7 @@ def _record_quality_metadata(record: dict, line: list[str]) -> dict:
     for flag, penalty in {
         "standard-like": 20,
         "trivial-capture": 18,
+        "trivial-capture-cleanup": 22,
         "trivial-recapture": 16,
         "check-evasion": 8,
     }.items():
@@ -2611,6 +2613,33 @@ def _web_line_san(record: dict) -> str:
         return " ".join(line)
     return " ".join(san_moves)
 
+
+WEB_LEGAL_MOVE_PUZZLE_IDS = {"94p6j", "wgyp7", "jdttv"}
+
+def _web_legal_moves(record: dict) -> list[list[str]]:
+    """Legal UCI moves for each playable state in the stored puzzle line.
+
+    The browser uses this engine-authored data to distinguish a legal wrong
+    move from an illegal one without attempting to reproduce all S-Chess rules.
+    """
+    if _web_puzzle_id(record) not in WEB_LEGAL_MOVE_PUZZLE_IDS:
+        return []
+
+    fen = str(record.get("fen") or "")
+    line = _normalize_line(record.get("line", []))
+    if not fen:
+        return []
+    try:
+        import pyffish
+
+        states: list[list[str]] = []
+        current = fen
+        for ply, move in enumerate(line):
+            states.append(list(pyffish.legal_moves("seirawan", current, [])) if ply % 2 == 0 else None)
+            current = pyffish.get_fen("seirawan", current, [move])
+        return states
+    except Exception:
+        return []
 
 def _web_line_san_for_fen(fen: str, line: list[str]) -> str:
     if not fen or not line:
@@ -2690,9 +2719,45 @@ def _web_motifs(record: dict, flags: list[str]) -> list[str]:
         motifs.add("fairy-piece")
     if len(first) >= 5 and first[4].lower() in {"h", "e"}:
         motifs.add("gating")
+    motifs.update(_web_repetition_motifs(record))
     if san and "x" not in san and "+" not in san and "#" not in san:
         motifs.add("quiet-move")
     return sorted(motifs or {"advantage"})
+
+
+def _web_repetition_motifs(record: dict) -> set[str]:
+    fen = str(record.get("fen") or "")
+    line = _normalize_line(record.get("line", []))
+    if not fen or len(line) < 4:
+        return set()
+    try:
+        import pyffish
+
+        san_moves = pyffish.get_san_moves("seirawan", fen, line)
+        fens = [fen]
+        current = fen
+        for move in line:
+            current = pyffish.get_fen("seirawan", current, [move])
+            fens.append(current)
+    except Exception:
+        return set()
+
+    keys: dict[tuple[str, str, str, str], int] = {}
+    repeated_ranges: list[tuple[int, int]] = []
+    for index, item in enumerate(fens):
+        parts = item.split()
+        if len(parts) < 4:
+            continue
+        key = (parts[0], parts[1], parts[2], parts[3])
+        previous = keys.get(key)
+        if previous is not None:
+            repeated_ranges.append((previous, index))
+        else:
+            keys[key] = index
+    if not repeated_ranges:
+        return set()
+
+    return {"perpetual-check"}
 
 
 def _web_fen_move_number(fen: str) -> int:
@@ -2776,7 +2841,7 @@ def _derived_review_flags(
     factual_flags = [
         flag
         for flag in flags
-        if flag not in {"trivial-recapture", "complex-recapture", "trivial-capture", "standard-like"}
+        if flag not in {"trivial-recapture", "complex-recapture", "trivial-capture", "trivial-capture-cleanup", "standard-like"}
     ]
     derived = list(dict.fromkeys(factual_flags))
     if "check-evasion" not in derived and _is_side_to_move_in_check(fen):
@@ -2786,6 +2851,8 @@ def _derived_review_flags(
             derived.append("complex-recapture")
         else:
             derived.append("trivial-recapture")
+    elif _is_trivial_capture_cleanup(fen, best_uci, best_san, line):
+        derived.append("trivial-capture-cleanup")
     elif _is_trivial_capture(fen, best_uci, best_san, line):
         derived.append("trivial-capture")
     if _is_standard_like_record(fen, line, best_san, second_san):
@@ -2827,6 +2894,46 @@ PIECE_VALUES = {
     "k": 0,
 }
 
+
+def _is_trivial_capture_cleanup(fen: str, best_uci: str, best_san: str, line: list[str]) -> bool:
+    """Detect a major fairy-piece capture followed by a cosmetic forced cleanup.
+
+    This is deliberately narrow: it catches a Hawk/Elephant winning at least a
+    rook, then an opposing Hawk/Elephant checking onto an immediate recapture
+    square. Broader three-ply exchanges remain visible for review.
+    """
+    if len(line or []) != 3 or not _is_capture_at_start(fen, best_uci, best_san):
+        return False
+    side = fen.split()[1] if len(fen.split()) > 1 else "w"
+    initial_board = _fen_board(fen)
+    if initial_board.get(line[0][:2], "").lower() not in {"e", "h"}:
+        return False
+    before = _material_advantage(initial_board, side)
+    after_first = _material_after_moves(fen, line[:1], side)
+    after_line = _material_after_moves(fen, line, side)
+    if after_first is None or after_line is None or after_first - before < 5:
+        return False
+    reply, cleanup = line[1], line[2]
+    if len(reply) < 4 or len(cleanup) < 4 or cleanup[2:4] != reply[2:4]:
+        return False
+    try:
+        import pyffish
+        reply_fen = pyffish.get_fen("seirawan", fen, line[:1])
+        if _fen_board(reply_fen).get(reply[:2], "").lower() not in {"e", "h"}:
+            return False
+        reply_san = pyffish.get_san_moves("seirawan", reply_fen, [reply])[0]
+        cleanup_fen = pyffish.get_fen("seirawan", reply_fen, [reply])
+        cleanup_san = pyffish.get_san_moves("seirawan", cleanup_fen, [cleanup])[0]
+    except Exception:
+        return False
+    return "+" in reply_san and "x" in cleanup_san and after_line >= after_first
+
+def _is_capture_at_start(fen: str, best_uci: str, best_san: str) -> bool:
+    if "x" in best_san or len(best_uci) < 4:
+        return True
+    board = _fen_board(fen)
+    side = fen.split()[1] if len(fen.split()) > 1 else "w"
+    return _is_enemy_piece(board.get(best_uci[2:4]), side)
 
 def _is_trivial_capture(fen: str, best_uci: str, best_san: str, line: list[str]) -> bool:
     if len(line or []) != 1 or len(best_uci) < 4:

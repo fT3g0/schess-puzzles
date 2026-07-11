@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import collections
@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 
-HIDDEN_BY_DEFAULT = {"standard-like", "trivial-recapture", "trivial-capture", "check-evasion", "manual-reject", "failed-reverify"}
+HIDDEN_BY_DEFAULT = {"standard-like", "trivial-recapture", "trivial-capture", "trivial-capture-cleanup", "check-evasion", "manual-reject", "failed-reverify"}
 
 
 def read_rows(path: Path) -> list[dict]:
