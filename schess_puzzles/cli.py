@@ -655,20 +655,32 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
         skipped_block_ids: list[str] = []
         if not missing and known_blocks:
             skip_pages, skipped_block_ids = _known_archive_skip_match(page_ids, known_blocks, page_size)
-        if skip_pages > 1:
-            print(
-                f"Archive page {page}: existing={len(existing)} to_download=0; "
-                f"matched known block, skipping {skip_pages} page(s)"
-            )
+        if not missing:
+            boundary_ids = skipped_block_ids or page_ids
             suggested_next_days = suggested_next_days or _suggest_next_archive_days(
-                skipped_block_ids,
+                boundary_ids,
                 config.paths.raw_games,
             )
-            pages_skipped += skip_pages - 1
-            skipped_existing += len(existing) * skip_pages
-            page += skip_pages
-            continue
-
+            if skip_pages > 1:
+                print(
+                    f"Archive page {page}: existing={len(existing)} to_download=0; "
+                    f"matched known block, skipping {skip_pages} page(s)"
+                )
+                pages_skipped += skip_pages - 1
+                skipped_existing += len(existing) * skip_pages
+                page += skip_pages
+            else:
+                print(
+                    f"Archive page {page}: discovered={len(page_ids)} existing={len(existing)} to_download=0; "
+                    "existing date boundary reached"
+                )
+                discovered_ids.extend(page_ids)
+                skipped_existing += len(existing)
+                page += 1
+            # A fully-known page marks the boundary of the useful date window.
+            # Return control to the unattended runner so it can restart at page 0
+            # with the older date range instead of probing the rest of this range.
+            break
         print(f"Archive page {page}: discovered={len(page_ids)} existing={len(existing)} to_download={len(missing)}")
         effective_pages_done += 1
         skipped_existing += len(existing)
@@ -698,15 +710,15 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
 
 
 def _archive_block_signature(args: argparse.Namespace) -> dict:
+    # Date windows deliberately do not participate: archive pages shift when
+    # the lower day boundary changes, but their game-ID sequences remain useful.
     return {
-        "days": args.days,
         "player_id": args.player_id,
         "username": args.username,
         "game_type": args.game_type,
         "rating_type": args.rating_type,
         "title": args.title,
     }
-
 
 def _read_archive_blocks(path: Path, signature: dict) -> list[list[str]]:
     if not path.exists():
@@ -723,7 +735,10 @@ def _read_archive_blocks(path: Path, signature: dict) -> list[list[str]]:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("signature") != signature:
+        record_signature = record.get("signature") or {}
+        # Backwards-compatible with manifests written before date windows were
+        # excluded from the signature.
+        if any(record_signature.get(key) != value for key, value in signature.items()):
             continue
         game_ids = record.get("game_ids")
         if isinstance(game_ids, list) and game_ids:
@@ -2372,6 +2387,8 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
                 continue
             record = json.loads(line)
             flags = record.get("flags", [])
+            if hidden_flags & set(flags):
+                continue
             solution_line_san = _web_line_san(record)
             mate_line = _web_mate_line(record)
             mate_start_fen = str(record.get("bonus_mate_start_fen") or "")
@@ -2657,11 +2674,11 @@ def _web_mate_line(record: dict) -> list[str]:
 def _web_categories(record: dict, flags: list[str]) -> dict:
     return {
         "phase": _web_phase(record),
+        "evaluation": _web_evaluation(record),
         "motifs": _web_motifs(record, flags),
         "length": _web_length(record),
         "source": _web_source_type(record),
     }
-
 
 def _web_source_type(record: dict) -> str:
     source = str(record.get("source") or "").lower()
@@ -2681,14 +2698,26 @@ def _web_phase(record: dict) -> str:
     return "middlegame"
 
 
+def _web_evaluation(record: dict) -> str:
+    best_score = record.get("best_score_cp") or 0
+    san = str(record.get("best_san") or "")
+    line_san = str(record.get("line_san") or record.get("solution_line_san") or "")
+    if (isinstance(best_score, (int, float)) and best_score >= 90000) or "#" in san or "#" in line_san:
+        return "checkmate"
+    if record.get("kind") == "drawing":
+        return "equality"
+    return "crushing" if best_score >= 600 else "advantage"
+
+
 def _web_length(record: dict) -> str:
     plies = max(1, len(record.get("line", [])))
     if plies <= 1:
         return "one-move"
     if plies <= 5:
         return "medium"
-    return "long"
-
+    if plies <= 9:
+        return "long"
+    return "very-long"
 
 def _web_motifs(record: dict, flags: list[str]) -> list[str]:
     motifs: set[str] = set()
@@ -2697,24 +2726,16 @@ def _web_motifs(record: dict, flags: list[str]) -> list[str]:
     line = record.get("line", []) or []
     first = str(line[0]) if line else str(record.get("best_uci") or "")
 
-    if record.get("kind") == "drawing":
-        motifs.add("equality")
-    elif record.get("kind") == "winning":
-        motifs.add("crushing" if (record.get("best_score_cp") or 0) >= 600 else "advantage")
-
-    if "check-evasion" in flag_set:
+    if "check-evasion" in flag_set or _is_material_defensive_record(record):
         motifs.add("defensive-move")
     if flag_set & {"recapture", "trivial-recapture", "complex-recapture"}:
         motifs.add("recapture")
-    line_san = str(record.get("line_san") or record.get("solution_line_san") or "")
-    best_score = record.get("best_score_cp") or 0
-    is_mate_score = isinstance(best_score, (int, float)) and best_score >= 90000
-    if "#" in san or "#" in line_san or is_mate_score:
-        motifs.add("checkmate")
-    elif "+" in san:
+    if "+" in san and "#" not in san:
         motifs.add("check")
-    if "=" in san or re.search(r"[a-h][18][a-h][18][nbrqeh]", first, re.IGNORECASE):
+    if _web_has_promotion(record):
         motifs.add("promotion")
+    if _web_has_double_attack(record):
+        motifs.add("double-attack")
     if "/H" in san or "/E" in san or re.search(r"(^|[^a-zA-Z])[HE](x|[a-h]|\d|$)", san):
         motifs.add("fairy-piece")
     if len(first) >= 5 and first[4].lower() in {"h", "e"}:
@@ -2722,8 +2743,112 @@ def _web_motifs(record: dict, flags: list[str]) -> list[str]:
     motifs.update(_web_repetition_motifs(record))
     if san and "x" not in san and "+" not in san and "#" not in san:
         motifs.add("quiet-move")
-    return sorted(motifs or {"advantage"})
+    return sorted(motifs)
 
+def _web_has_promotion(record: dict) -> bool:
+    """Return true only for a real pawn promotion, never an H/E gating suffix."""
+    fen = str(record.get("fen") or "")
+    line = _normalize_line(record.get("line", []))
+    if not fen or not line:
+        return False
+    try:
+        import pyffish
+
+        current = fen
+        for move in line:
+            if len(move) >= 5:
+                piece = _fen_board(current).get(move[:2], "")
+                if piece.lower() == "p" and move[3] in {"1", "8"}:
+                    return True
+            current = pyffish.get_fen("seirawan", current, [move])
+    except Exception:
+        return False
+    return False
+
+
+def _web_has_double_attack(record: dict) -> bool:
+    """Recognize a line-backed fork, including a gating piece on its entry square.
+
+    Geometric attacks alone are too broad. A qualifying line must subsequently
+    capture one of the two attacked targets, so the label describes an actual
+    material-winning double attack rather than a harmless pressure move.
+    """
+    fen = str(record.get("fen") or "")
+    line = _normalize_line(record.get("line", []))
+    if not fen or len(line) < 3 or len(line[0]) < 4 or len(line[2]) < 4:
+        return False
+    first, reply, continuation = line[:3]
+    try:
+        import pyffish
+
+        side = fen.split()[1]
+        after_first_fen = pyffish.get_fen("seirawan", fen, [first])
+        after_first = _fen_board(after_first_fen)
+        attacker_squares = [first[2:4]]
+        if len(first) >= 5 and first[4].lower() in {"e", "h"}:
+            attacker_squares.append(first[:2])
+
+        for attacker_square in attacker_squares:
+            attacker = after_first.get(attacker_square, "")
+            if not attacker:
+                continue
+            targets: set[str] = set()
+            valuable_targets = 0
+            attacks_king = False
+            for square, piece in after_first.items():
+                if not _is_enemy_piece(piece, side) or not _attacks(attacker, attacker_square, square, after_first):
+                    continue
+                targets.add(square)
+                if piece.lower() == "k":
+                    attacks_king = True
+                elif PIECE_VALUES.get(piece.lower(), 0) >= 3:
+                    valuable_targets += 1
+            if not (valuable_targets >= 2 or (attacks_king and valuable_targets >= 1)):
+                continue
+
+            before_continuation = pyffish.get_fen("seirawan", after_first_fen, [reply])
+            board_before_capture = _fen_board(before_continuation)
+            capture_target = continuation[2:4]
+            moving_piece = board_before_capture.get(continuation[:2], "")
+            captured_piece = board_before_capture.get(capture_target, "")
+            if (
+                moving_piece
+                and not _is_enemy_piece(moving_piece, side)
+                and _is_enemy_piece(captured_piece, side)
+                and capture_target in targets
+            ):
+                return True
+    except Exception:
+        return False
+    return False
+
+def _is_material_defensive_record(record: dict) -> bool:
+    """Identify only-move equality saves that preserve material throughout."""
+    if record.get("kind") != "drawing":
+        return False
+    material = record.get("material") or {}
+    before = material.get("before")
+    best = record.get("best_score_cp")
+    second = record.get("second_score_cp")
+    if not all(isinstance(value, (int, float)) for value in (before, best, second)):
+        return False
+    if abs(best - before * 100) > 150 or second > -150:
+        return False
+    line = _normalize_line(record.get("line", []))
+    if not line:
+        return False
+    try:
+        import pyffish
+
+        current = str(record.get("fen") or "")
+        side = str(record.get("side") or current.split()[1])
+        for move in line:
+            current = pyffish.get_fen("seirawan", current, [move])
+            if _material_advantage(_fen_board(current), side) != before:
+                return False
+    except Exception:
+        return False
+    return True
 
 def _web_repetition_motifs(record: dict) -> set[str]:
     fen = str(record.get("fen") or "")

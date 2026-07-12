@@ -4,22 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>S-Chess Tactics</title>
-  <link rel="stylesheet" href="styles.css?v=20260710-curated-levels-2">
+  <link rel="stylesheet" href="styles.css?v=20260712-filters-help-4">
 </head>
 <body>
   <main class="app">
     <section class="board-area">
       <div class="board-layout">
         <div class="board-shell">
-          <div id="board" class="board" aria-label="Chess board"></div>
+          <div id="board" class="board" aria-label="Chess board" data-help="Select a piece and then its destination square, or drag it to move."></div>
         </div>
-        <div id="reserve" class="reserve-panel" aria-label="Available insert pieces"></div>
+        <div id="reserve" class="reserve-panel" aria-label="Available insert pieces" data-help="Shows the Hawks and Elephants still in reserve. Choose one here when a gating move is available."></div>
       </div>
     </section>
     <aside class="panel">
       <nav class="puzzle-set-tabs" aria-label="Puzzle set">
-        <button id="set-full" class="active" type="button">Full Puzzle Set</button>
-        <button id="set-curated" type="button">Curated Set <span>BETA</span></button>
+        <button id="set-full" class="active" type="button" data-help="Browse all published puzzle candidates.">Full Puzzle Set</button>
+        <button id="set-curated" type="button" data-help="Browse hand-picked puzzles grouped by difficulty.">Curated Set <span>BETA</span></button>
       </nav>
       <div id="curated-levels" class="curated-levels hidden" aria-label="Curated difficulty">
         <button data-curated-level="beginner" type="button">Beginner</button>
@@ -34,58 +34,41 @@
           <h1 id="title">S-Chess Tactics</h1>
         </div>
         <div class="header-actions">
-          <button id="theme" class="icon-button" title="Toggle dark mode">DM</button>
-          <button id="random" class="icon-button" title="Random puzzle">R</button>
+          <button id="theme" class="icon-button" type="button" title="Toggle light and dark mode" aria-label="Toggle light and dark mode" data-help="Switch the interface between light and dark mode."><span class="theme-icon" aria-hidden="true"></span></button>
+          <button id="random" class="icon-button" type="button" title="Random puzzle" aria-label="Random puzzle" data-help="Open a random puzzle from the current selection."><span class="dice-icon" aria-hidden="true"></span></button>
+          <button id="help" class="icon-button help-button" type="button" title="Toggle help" aria-label="Toggle help" data-help="Turn contextual UI explanations on or off.">?</button>
         </div>
       </header>
 
       <div class="controls">
-        <button id="prev">Previous</button>
-        <button id="next">Next</button>
-        <button id="reset">Reset</button>
-        <button id="unmoved" type="button">Castling &amp; gating options</button>
+        <button id="prev" data-help="Go to the previous puzzle in the current selection.">Previous</button>
+        <button id="next" data-help="Go to the next puzzle in the current selection.">Next</button>
+        <button id="reset" data-help="Reset the current puzzle to its starting position.">Reset</button>
+        <button id="unmoved" type="button" data-help="Highlight pieces and squares that still allow castling or gating.">Castling &amp; gating options</button>
       </div>
 
       <div class="filters">
-        <div id="standard-filters" class="standard-filters">
-          <label><input id="show-hidden" type="checkbox"> Show hidden-by-default</label>
-          <div id="hidden-options" class="subfilters hidden">
-          <label><input id="show-check" type="checkbox" checked> Check evasions</label>
-          <label><input id="show-recapture" type="checkbox" checked> Recaptures</label>
-          </div>
-        </div>
-        <label>Board theme <select id="board-theme">
+        <label data-help="Choose the colors of light and dark board squares.">Board theme <select id="board-theme">
           <option value="wood">Wood</option>
           <option value="wood-muted">Muted wood</option>
           <option value="classic">Classic green</option>
           <option value="blue">Blue</option>
           <option value="gray">Gray</option>
         </select></label>
-        <button id="category-toggle" type="button">Filter by categories</button>
-        <div id="category-options" class="select-filters hidden">
-          <div class="category-row">
-            <label>Phase <select id="phase-filter"><option value="">All</option></select></label>
-            <div id="phase-detail" class="detail-options hidden"></div>
-          </div>
-          <div class="category-row">
-            <label>Motif <select id="motif-filter"><option value="">All</option></select></label>
-            <div id="motif-detail" class="detail-options hidden"></div>
-          </div>
-          <div class="category-row">
-            <label>Length <select id="length-filter"><option value="">All</option></select></label>
-            <div id="length-detail" class="detail-options hidden"></div>
-          </div>
-          <div class="category-row">
-            <label>Source <select id="source-filter"><option value="">All</option></select></label>
-          </div>
+        <button id="category-toggle" type="button" data-help="Filter the puzzle set by phase, evaluation, motif, length, or source.">Filter by categories</button>
+        <div id="category-options" class="select-filters hidden" data-help="Use a simple selection, or open Detailed inclusion/exclusion for more control.">
+          <div class="category-row"><label data-help="Opening, middlegame, or endgame, based on the starting position.">Phase <select id="phase-filter"><option value="">All</option></select></label><div id="phase-detail" class="detail-options hidden"></div></div>
+          <div class="category-row"><label data-help="The engine result of the correct move: checkmate, crushing, advantage, or equality.">Evaluation <select id="evaluation-filter"><option value="">All</option></select></label><div id="evaluation-detail" class="detail-options hidden"></div></div>
+          <div class="category-row"><label data-help="The tactical idea. Detailed mode lets you include or exclude several motifs.">Motif <select id="motif-filter"><option value="">All</option></select></label><div id="motif-detail" class="detail-options hidden"></div></div>
+          <div class="category-row"><label data-help="The forced line length: one move, medium, long, or very long.">Length <select id="length-filter"><option value="">All</option></select></label><div id="length-detail" class="detail-options hidden"></div></div>
+          <div class="category-row"><label data-help="Whether the puzzle came from a human game, engine self-play, or a manual suggestion.">Source <select id="source-filter"><option value="">All</option></select></label></div>
         </div>
       </div>
-
       <p id="status" class="status">Loading puzzles...</p>
       <div id="move-choices" class="move-choices hidden"></div>
       <p id="source" class="source"></p>
 
-      <button id="reveal" class="primary">Reveal solution</button>
+      <button id="reveal" class="primary" data-help="Reveal the best move, full engine line, and category data.">Reveal solution</button>
       <a id="analysis" class="analysis-link hidden" target="_blank" rel="noopener">Analyze on pychess</a>
       <button id="mate-playout" class="secondary hidden" type="button">Play out fastest checkmate yourself</button>
       <section id="solution" class="solution hidden">
@@ -94,16 +77,51 @@
       </section>
 
       <section class="suggestion-box">
-        <button id="suggest-toggle" class="secondary" type="button">Suggest puzzle</button>
-        <div id="suggest-panel" class="suggest-panel hidden">
-          <label>FEN <textarea id="suggest-fen" rows="3" spellcheck="false" placeholder="Paste a Seirawan FEN"></textarea></label>
-          <label>Notes <textarea id="suggest-notes" rows="3" placeholder="Optional: solution idea, source, or why it is interesting"></textarea></label>
-          <button id="suggest-submit" type="button">Send suggestion</button>
-          <p id="suggest-status" class="suggest-status"></p>
-        </div>
+        <button id="suggest-toggle" class="secondary" type="button" data-help="Open the board editor or paste a FEN to suggest a puzzle.">Suggest puzzle</button>
       </section>
     </aside>
   </main>
-  <script src="app.js?v=20260710-curated-levels-2"></script>
+  <div id="help-tooltip" class="help-tooltip hidden" role="tooltip"></div>
+  <section id="suggest-editor" class="suggest-editor hidden" aria-modal="true" role="dialog" aria-labelledby="suggest-editor-title">
+    <div class="suggest-editor-shell">
+      <header class="suggest-editor-head">
+        <div>
+          <p class="counter">Puzzle suggestion</p>
+          <h1 id="suggest-editor-title">Position editor</h1>
+        </div>
+        <button id="editor-cancel-top" class="icon-button" type="button" title="Cancel">X</button>
+      </header>
+      <div class="suggest-editor-layout">
+        <div id="editor-board" class="board editor-board" aria-label="Position editor board"></div>
+        <div class="editor-tools">
+          <div>
+            <p class="editor-label">Place piece</p>
+            <div id="editor-palette" class="editor-palette"></div>
+          </div>
+          <label>FEN <textarea id="editor-fen" rows="4" spellcheck="false" placeholder="Paste a complete Seirawan FEN"></textarea></label>
+          <div class="editor-fields">
+            <label>Side <select id="editor-side"><option value="w">White</option><option value="b">Black</option></select></label>
+            <label>Reserve <input id="editor-pocket" spellcheck="false" placeholder="HEhe"></label>
+            <label>Castling / gating <input id="editor-castling" spellcheck="false" placeholder="- or KQabc"></label>
+            <label>En passant <input id="editor-ep" spellcheck="false" placeholder="-"></label>
+            <label>Halfmove <input id="editor-halfmove" type="number" min="0" value="0"></label>
+            <label>Move <input id="editor-fullmove" type="number" min="1" value="1"></label>
+          </div>
+          <div class="editor-actions">
+            <button id="editor-clear" type="button">Clear board</button>
+            <button id="editor-start" type="button">Start position</button>
+          </div>
+          <label>Notes <textarea id="editor-notes" rows="3" placeholder="Optional: solution idea, source, or why it is interesting"></textarea></label>
+          <p id="editor-status" class="suggest-status"></p>
+          <div class="editor-actions editor-finish">
+            <button id="editor-cancel" type="button">Cancel</button>
+            <button id="editor-done" class="primary" type="button">Done</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <script src="curated-puzzles.js?v=20260712-1"></script>
+  <script src="app.js?v=20260712-filters-help-4"></script>
 </body>
 </html>

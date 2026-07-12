@@ -19,20 +19,27 @@ const state = {
   randomizeInitialPuzzle: false,
   puzzleSet: "full",
   curatedLevel: "beginner",
+  editor: null,
+  helpMode: false,
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
-const hiddenTags = new Set(["standard-like", "trivial-recapture", "trivial-capture", "trivial-capture-cleanup", "check-evasion", "manual-reject", "failed-reverify"]);
-const defaultExcludedMotifs = new Set(["equality", "defensive-move"]);
-const curatedLevels = {
-  beginner: ["gnx85", "dkcpr", "cdkuv", "2ph2z"],
-  "lower-intermediate": ["6rttj", "y37mv", "ue8pk", "sq7hh", "qngev", "ytxms", "m2czc", "j8qev"],
-  "upper-intermediate": ["7x6sd", "xfgsk", "xhayk", "tphna", "4mtrc"],
-  advanced: ["qqn6r", "d33pe", "pchym", "vp2na", "kwehk"],
-  expert: ["yqg68", "j5jur"],
+const defaultExcludedEvaluation = new Set(["equality"]);
+const motifHelp = {
+  "double-attack": "The moved piece attacks two valuable targets, or the king plus a valuable piece.",
+  promotion: "A pawn reaches the last rank and promotes.",
+  "perpetual-check": "A forcing repetition or perpetual check secures the result.",
+  gating: "The tactic uses a Hawk or Elephant insertion.",
+  "defensive-move": "The only move preserves the material balance instead of winning material.",
 };
-const curatedPuzzleIds = new Set(Object.values(curatedLevels).flat());
-const suggestionStorageKey = "schess-puzzle-suggestions";
+const curatedLevels = window.SCHESS_CURATED_LEVELS || {
+  beginner: [],
+  "lower-intermediate": [],
+  "upper-intermediate": [],
+  advanced: [],
+  expert: [],
+};
+const curatedPuzzleIds = new Set(Object.values(curatedLevels).flat());const suggestionStorageKey = "schess-puzzle-suggestions";
 const suggestionApiUrl = "https://schess-puzzle-suggestions.ft3g0.workers.dev/suggestions";
 const boardEl = document.getElementById("board");
 const counterEl = document.getElementById("counter");
@@ -44,6 +51,7 @@ const lineEl = document.getElementById("line");
 const detailsEl = document.getElementById("details");
 const moveChoicesEl = document.getElementById("move-choices");
 const reserveEl = document.getElementById("reserve");
+const helpTooltipEl = document.getElementById("help-tooltip");
 
 const controls = {
   prev: document.getElementById("prev"),
@@ -53,18 +61,16 @@ const controls = {
   random: document.getElementById("random"),
   reveal: document.getElementById("reveal"),
   theme: document.getElementById("theme"),
+  help: document.getElementById("help"),
   analysis: document.getElementById("analysis"),
   matePlayOut: document.getElementById("mate-playout"),
   setFull: document.getElementById("set-full"),
   setCurated: document.getElementById("set-curated"),
   curatedLevels: document.getElementById("curated-levels"),
-  showHidden: document.getElementById("show-hidden"),
-  hiddenOptions: document.getElementById("hidden-options"),
-  standardFilters: document.getElementById("standard-filters"),
-  showCheck: document.getElementById("show-check"),
-  showRecapture: document.getElementById("show-recapture"),
   phase: document.getElementById("phase-filter"),
   phaseDetail: document.getElementById("phase-detail"),
+  evaluation: document.getElementById("evaluation-filter"),
+  evaluationDetail: document.getElementById("evaluation-detail"),
   motif: document.getElementById("motif-filter"),
   motifDetail: document.getElementById("motif-detail"),
   length: document.getElementById("length-filter"),
@@ -74,11 +80,23 @@ const controls = {
   categoryOptions: document.getElementById("category-options"),
   boardTheme: document.getElementById("board-theme"),
   suggestToggle: document.getElementById("suggest-toggle"),
-  suggestPanel: document.getElementById("suggest-panel"),
-  suggestFen: document.getElementById("suggest-fen"),
-  suggestNotes: document.getElementById("suggest-notes"),
-  suggestSubmit: document.getElementById("suggest-submit"),
-  suggestStatus: document.getElementById("suggest-status"),
+  editor: document.getElementById("suggest-editor"),
+  editorBoard: document.getElementById("editor-board"),
+  editorPalette: document.getElementById("editor-palette"),
+  editorFen: document.getElementById("editor-fen"),
+  editorNotes: document.getElementById("editor-notes"),
+  editorSide: document.getElementById("editor-side"),
+  editorPocket: document.getElementById("editor-pocket"),
+  editorCastling: document.getElementById("editor-castling"),
+  editorEp: document.getElementById("editor-ep"),
+  editorHalfmove: document.getElementById("editor-halfmove"),
+  editorFullmove: document.getElementById("editor-fullmove"),
+  editorClear: document.getElementById("editor-clear"),
+  editorStart: document.getElementById("editor-start"),
+  editorDone: document.getElementById("editor-done"),
+  editorCancel: document.getElementById("editor-cancel"),
+  editorCancelTop: document.getElementById("editor-cancel-top"),
+  editorStatus: document.getElementById("editor-status"),
 };
 
 async function boot() {
@@ -108,6 +126,7 @@ function bindControls() {
   controls.reveal.addEventListener("click", revealSolution);
   controls.matePlayOut.addEventListener("click", startMatePlayOut);
   controls.theme.addEventListener("click", toggleTheme);
+  controls.help.addEventListener("click", toggleHelpMode);
   controls.categoryToggle.addEventListener("click", toggleCategoryFilters);
   controls.setFull.addEventListener("click", () => setPuzzleSet("full"));
   controls.setCurated.addEventListener("click", () => setPuzzleSet("curated"));
@@ -115,16 +134,27 @@ function bindControls() {
     button.addEventListener("click", () => setCuratedLevel(button.dataset.curatedLevel));
   });
   controls.boardTheme.addEventListener("change", () => applyBoardTheme(controls.boardTheme.value));
-  if (controls.suggestToggle && controls.suggestSubmit) {
-    controls.suggestToggle.addEventListener("click", toggleSuggestionPanel);
-    controls.suggestSubmit.addEventListener("click", submitSuggestion);
+  if (controls.suggestToggle && controls.editor) {
+    controls.suggestToggle.addEventListener("click", openSuggestionEditor);
+    controls.editorCancel.addEventListener("click", closeSuggestionEditor);
+    controls.editorCancelTop.addEventListener("click", closeSuggestionEditor);
+    controls.editorDone.addEventListener("click", submitEditorSuggestion);
+    controls.editorClear.addEventListener("click", () => setEditorFen(emptyEditorFen()));
+    controls.editorStart.addEventListener("click", () => setEditorFen(startEditorFen()));
+    controls.editorFen.addEventListener("input", syncEditorFromFenInput);
+    for (const input of [controls.editorSide, controls.editorPocket, controls.editorCastling, controls.editorEp, controls.editorHalfmove, controls.editorFullmove]) {
+      input.addEventListener("input", syncEditorFen);
+      input.addEventListener("change", syncEditorFen);
+    }
   }
   document.addEventListener("keydown", onKeyDown);
   document.addEventListener("click", onDocumentClick);
-  for (const input of [controls.showHidden, controls.showCheck, controls.showRecapture, controls.phase, controls.motif, controls.length, controls.source]) {
+  document.addEventListener("pointerover", onHelpPointerOver);
+  document.addEventListener("pointerout", onHelpPointerOut);
+  document.addEventListener("pointermove", onHelpPointerMove);
+  for (const input of [controls.phase, controls.evaluation, controls.motif, controls.length, controls.source]) {
     input.addEventListener("change", onFilterControlChanged);
-  }
-  for (const select of [controls.phase, controls.motif, controls.length]) {
+  }  for (const select of [controls.phase, controls.evaluation, controls.motif, controls.length]) {
     select.addEventListener("click", () => {
       if (select.value === "__detail") {
         state.openDetailFilter = detailGroupForSelect(select);
@@ -140,37 +170,38 @@ function enrichPuzzle(puzzle) {
     ...puzzle,
     categories: {
       phase: categories.phase || inferPhase(puzzle),
+      evaluation: categories.evaluation || inferEvaluation(puzzle),
       motifs: categories.motifs || inferMotifs(puzzle),
       length: categories.length || inferLength(puzzle),
       source: categories.source || inferSource(puzzle),
     },
   };
 }
-
 function populateCategoryFilters() {
   const phases = [...new Set(state.puzzles.map((p) => p.categories.phase).filter(Boolean))];
+  const evaluations = [...new Set(state.puzzles.map((p) => p.categories.evaluation).filter(Boolean))];
   const motifs = [...new Set(state.puzzles.flatMap((p) => p.categories.motifs || []))];
   const lengths = [...new Set(state.puzzles.map((p) => p.categories.length).filter(Boolean))];
   const sources = [...new Set(state.puzzles.map((p) => p.categories.source).filter(Boolean))];
   fillSelect(controls.phase, phases, ["opening", "middlegame", "endgame"], "All", true);
+  fillSelect(controls.evaluation, evaluations, ["checkmate", "crushing", "advantage", "equality"], "All", true);
   fillSelect(controls.motif, motifs, [], "All", true);
-  fillSelect(controls.length, lengths, ["one-move", "medium", "long"], "All", true);
+  fillSelect(controls.length, lengths, ["one-move", "medium", "long", "very-long"], "All", true);
   fillSelect(controls.source, sources, ["human-game", "engine-selfplay", "manual-suggestion"], "All", false);
   fillDetailOptions(controls.phaseDetail, phases, ["opening", "middlegame", "endgame"], "phase");
+  fillDetailOptions(controls.evaluationDetail, evaluations, ["checkmate", "crushing", "advantage", "equality"], "evaluation");
   fillDetailOptions(controls.motifDetail, motifs, [], "motif");
-  fillDetailOptions(controls.lengthDetail, lengths, ["one-move", "medium", "long"], "length");
+  fillDetailOptions(controls.lengthDetail, lengths, ["one-move", "medium", "long", "very-long"], "length");
   applyMainstreamDefaultFilters();
 }
-
 function applyMainstreamDefaultFilters() {
   controls.length.value = "__detail";
   setDetailChecked(controls.lengthDetail, "one-move", false);
-  controls.motif.value = "__detail";
-  for (const motif of defaultExcludedMotifs) setDetailChecked(controls.motifDetail, motif, false);
+  controls.evaluation.value = "__detail";
+  for (const evaluation of defaultExcludedEvaluation) setDetailChecked(controls.evaluationDetail, evaluation, false);
   state.openDetailFilter = "";
   updateDetailFilterVisibility();
 }
-
 function setDetailChecked(container, value, checked) {
   if (!container) return;
   const input = [...container.querySelectorAll('input[type="checkbox"]')].find((box) => box.value === value);
@@ -205,6 +236,26 @@ function fillDetailOptions(container, values, preferred = [], group) {
   done.textContent = "Done";
   done.addEventListener("click", () => closeDetailFilterForContainer(container));
   container.appendChild(done);
+
+  if (group === "motif") {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "detail-toggle";
+    clear.textContent = "Clear";
+    clear.addEventListener("click", () => {
+      resetMotifChips(container);
+      applyFilters();
+    });
+    container.appendChild(clear);
+    const hint = document.createElement("p");
+    hint.className = "detail-hint";
+    hint.textContent = "Click a motif: include, exclude, neutral.";
+    hint.dataset.help = "Each click cycles a motif through include, exclude, and neutral. Included motifs match at least one; excluded motifs never match.";
+    container.appendChild(hint);
+    for (const value of ordered) container.appendChild(createMotifChip(value));
+    return;
+  }
+
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "detail-toggle";
@@ -230,12 +281,58 @@ function fillDetailOptions(container, values, preferred = [], group) {
   }
 }
 
+function createMotifChip(value) {
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "motif-chip";
+  chip.dataset.value = value;
+  chip.dataset.state = "neutral";
+  chip.dataset.help = motifHelp[value] || "A tactical motif used to classify this puzzle.";
+  chip.setAttribute("aria-pressed", "false");
+  updateMotifChip(chip);
+  chip.addEventListener("click", () => {
+    const states = ["neutral", "include", "exclude"];
+    chip.dataset.state = states[(states.indexOf(chip.dataset.state) + 1) % states.length];
+    updateMotifChip(chip);
+    applyFilters();
+  });
+  return chip;
+}
+
+function updateMotifChip(chip) {
+  const stateName = chip.dataset.state || "neutral";
+  chip.classList.toggle("include", stateName === "include");
+  chip.classList.toggle("exclude", stateName === "exclude");
+  chip.textContent = `${stateName === "include" ? "+ " : stateName === "exclude" ? "- " : ""}${labelText(chip.dataset.value)}`;
+  chip.setAttribute("aria-label", `${labelText(chip.dataset.value)}: ${stateName}`);
+  chip.title = `${motifHelp[chip.dataset.value] || "Tactical motif"} Click to cycle include, exclude, neutral.`;
+  chip.setAttribute("aria-pressed", String(stateName !== "neutral"));
+}
+
+function resetMotifChips(container) {
+  container?.querySelectorAll(".motif-chip").forEach((chip) => {
+    chip.dataset.state = "neutral";
+  chip.dataset.help = motifHelp[value] || "A tactical motif used to classify this puzzle.";
+    updateMotifChip(chip);
+  });
+}
+
+function motifChipSets(container) {
+  const include = new Set();
+  const exclude = new Set();
+  container.querySelectorAll(".motif-chip").forEach((chip) => {
+    if (chip.dataset.state === "include") include.add(chip.dataset.value);
+    if (chip.dataset.state === "exclude") exclude.add(chip.dataset.value);
+  });
+  return { include, exclude };
+}
 function onFilterControlChanged(event) {
   const select = event?.target;
   if (select?.value === "__detail") {
     state.openDetailFilter = detailGroupForSelect(select);
-    resetDetailChecks(detailContainerForSelect(select), true);
-  } else if ([controls.phase, controls.motif, controls.length].includes(select) && state.openDetailFilter === detailGroupForSelect(select)) {
+    if (select === controls.motif) resetMotifChips(controls.motifDetail);
+    else resetDetailChecks(detailContainerForSelect(select), true);
+  } else if ([controls.phase, controls.evaluation, controls.motif, controls.length].includes(select) && state.openDetailFilter === detailGroupForSelect(select)) {
     state.openDetailFilter = "";
   }
   updateDetailFilterVisibility();
@@ -262,28 +359,28 @@ function onDocumentClick(event) {
 }
 function updateDetailFilterVisibility() {
   controls.phaseDetail.classList.toggle("hidden", !(controls.phase.value === "__detail" && state.openDetailFilter === "phase"));
+  controls.evaluationDetail.classList.toggle("hidden", !(controls.evaluation.value === "__detail" && state.openDetailFilter === "evaluation"));
   controls.motifDetail.classList.toggle("hidden", !(controls.motif.value === "__detail" && state.openDetailFilter === "motif"));
   controls.lengthDetail.classList.toggle("hidden", !(controls.length.value === "__detail" && state.openDetailFilter === "length"));
 }
-
 function detailGroupForSelect(select) {
   if (select === controls.phase) return "phase";
+  if (select === controls.evaluation) return "evaluation";
   if (select === controls.motif) return "motif";
   if (select === controls.length) return "length";
   return "";
 }
-
 function detailContainerForSelect(select) {
   return detailContainerForGroup(detailGroupForSelect(select));
 }
 
 function detailContainerForGroup(group) {
   if (group === "phase") return controls.phaseDetail;
+  if (group === "evaluation") return controls.evaluationDetail;
   if (group === "motif") return controls.motifDetail;
   if (group === "length") return controls.lengthDetail;
   return null;
 }
-
 function resetDetailChecks(container, checked) {
   if (!container) return;
   container.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = checked; });
@@ -310,12 +407,10 @@ function updatePuzzleSetTabs() {
   controls.setFull.classList.toggle("active", state.puzzleSet === "full");
   controls.setCurated.classList.toggle("active", state.puzzleSet === "curated");
   controls.curatedLevels.classList.toggle("hidden", state.puzzleSet !== "curated");
-  controls.standardFilters.classList.toggle("hidden", state.puzzleSet === "curated");
   controls.categoryToggle.classList.toggle("hidden", state.puzzleSet === "curated");
   if (state.puzzleSet === "curated") controls.categoryOptions.classList.add("hidden");
   updateCuratedLevelTabs();
 }
-
 function updateCuratedLevelTabs() {
   controls.curatedLevels.querySelectorAll("[data-curated-level]").forEach((button) => {
     button.classList.toggle("active", button.dataset.curatedLevel === state.curatedLevel);
@@ -323,58 +418,34 @@ function updateCuratedLevelTabs() {
 }
 
 function applyFilters() {
-  controls.hiddenOptions.classList.toggle("hidden", !controls.showHidden.checked);
   updateDetailFilterVisibility();
   updatePuzzleSetTabs();
   const phaseSet = checkedDetailValues(controls.phaseDetail);
-  const motifSet = checkedDetailValues(controls.motifDetail);
+  const evaluationSet = checkedDetailValues(controls.evaluationDetail);
+  const motifFilters = motifChipSets(controls.motifDetail);
   const lengthSet = checkedDetailValues(controls.lengthDetail);
   state.filtered = state.puzzles.filter((puzzle) => {
-    if (state.puzzleSet === "curated") {
-      if (!(curatedLevels[state.curatedLevel] || []).includes(puzzle.id)) return false;
-      return true;
-    }
-    const tags = new Set(puzzle.tags || []);
+    if (state.puzzleSet === "curated") return (curatedLevels[state.curatedLevel] || []).includes(puzzle.id);
     const motifs = new Set(puzzle.categories.motifs || []);
-    if (!controls.showHidden.checked && puzzle.hidden_by_default) return false;
-    if (controls.showHidden.checked && !controls.showCheck.checked && tags.has("check-evasion")) return false;
-    if (controls.showHidden.checked && !controls.showRecapture.checked && tags.has("trivial-recapture")) return false;
-
     if (controls.phase.value === "__detail") {
       if (!phaseSet.has(puzzle.categories.phase)) return false;
-    } else if (controls.phase.value && puzzle.categories.phase !== controls.phase.value) {
-      return false;
-    }
-
+    } else if (controls.phase.value && puzzle.categories.phase !== controls.phase.value) return false;
+    if (controls.evaluation.value === "__detail") {
+      if (!evaluationSet.has(puzzle.categories.evaluation)) return false;
+    } else if (controls.evaluation.value && puzzle.categories.evaluation !== controls.evaluation.value) return false;
     if (controls.motif.value === "__detail") {
-      const puzzleMotifs = puzzle.categories.motifs || [];
-      if (!puzzleMotifs.length || !puzzleMotifs.some((motif) => motifSet.has(motif))) return false;
-      if (puzzleMotifs.some((motif) => !motifSet.has(motif))) return false;
-    } else if (controls.motif.value && !motifs.has(controls.motif.value)) {
-      return false;
-    }
-
-    if (controls.length.value === "__detail") {
+      if (motifFilters.include.size && ![...motifs].some((motif) => motifFilters.include.has(motif))) return false;
+      if ([...motifs].some((motif) => motifFilters.exclude.has(motif))) return false;
+    } else if (controls.motif.value && !motifs.has(controls.motif.value)) return false;    if (controls.length.value === "__detail") {
       if (!lengthSet.has(puzzle.categories.length)) return false;
-    } else if (controls.length.value && puzzle.categories.length !== controls.length.value) {
-      return false;
-    }
-
-    if (controls.source.value && puzzle.categories.source !== controls.source.value) {
-      return false;
-    }
-
+    } else if (controls.length.value && puzzle.categories.length !== controls.length.value) return false;
+    if (controls.source.value && puzzle.categories.source !== controls.source.value) return false;
     return true;
   });
   const requested = state.requestedPuzzleId ? state.puzzles.find((puzzle) => puzzle.id === state.requestedPuzzleId) : null;
   if (requested) {
     const filteredIndex = state.filtered.findIndex((puzzle) => puzzle.id === requested.id);
-    if (filteredIndex >= 0) {
-      state.index = filteredIndex;
-    } else {
-      state.filtered = [requested];
-      state.index = 0;
-    }
+    if (filteredIndex >= 0) { state.index = filteredIndex; } else { state.filtered = [requested]; state.index = 0; }
     state.requestedPuzzleId = "";
   } else if (state.randomizeInitialPuzzle && state.filtered.length) {
     state.index = Math.floor(Math.random() * state.filtered.length);
@@ -385,7 +456,6 @@ function applyFilters() {
   resetPuzzle();
   updatePuzzleUrl();
 }
-
 function currentPuzzle() {
   return state.filtered[state.index];
 }
@@ -1119,6 +1189,11 @@ function clearMoveChoices() {
 }
 
 function onKeyDown(event) {
+  if (state.editor && event.key === "Escape") {
+    event.preventDefault();
+    closeSuggestionEditor();
+    return;
+  }
   if (event.key === "Escape" && state.openDetailFilter) {
     event.preventDefault();
     closeAllDetailFilters();
@@ -1343,9 +1418,8 @@ function revealSolution() {
 
 function puzzleCategoryLabels(puzzle) {
   const cats = puzzle.categories || {};
-  return [cats.phase, cats.length, cats.source, ...(cats.motifs || [])].filter(Boolean).map(labelText);
+  return [cats.phase, cats.evaluation, cats.length, cats.source, ...(cats.motifs || [])].filter(Boolean).map(labelText);
 }
-
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -1404,13 +1478,21 @@ function isEndgameFen(fen) {
   return queens === 0 && nonKingNonPawn <= 4;
 }
 
+function inferEvaluation(puzzle) {
+  const score = puzzle.scores?.best_cp;
+  const line = puzzle.solution_line_san || "";
+  if (line.includes("#") || (Number.isFinite(score) && score >= 90000)) return "checkmate";
+  if (puzzle.kind === "drawing") return "equality";
+  return Number.isFinite(score) && score >= 600 ? "crushing" : "advantage";
+}
+
 function inferLength(puzzle) {
   const plies = (puzzle.solution || []).length || 1;
   if (plies <= 1) return "one-move";
   if (plies <= 5) return "medium";
-  return "long";
+  if (plies <= 9) return "long";
+  return "very-long";
 }
-
 function inferSource(puzzle) {
   const source = String(puzzle.source_url || "").toLowerCase();
   if (source.includes("chess.com") || source.includes("pychess.org")) return "human-game";
@@ -1423,24 +1505,34 @@ function inferMotifs(puzzle) {
   const motifs = new Set();
   const san = puzzle.solution_san || "";
   const first = (puzzle.solution || [""])[0] || "";
-  if (puzzle.kind === "drawing") motifs.add("equality");
-  if (puzzle.kind === "winning") motifs.add(scoreMotif(puzzle));
   if (tags.has("check-evasion")) motifs.add("defensive-move");
   if (tags.has("trivial-recapture") || tags.has("complex-recapture") || tags.has("recapture")) motifs.add("recapture");
   const fullLineSan = puzzle.solution_line_san || "";
   const bestScore = puzzle.scores?.best_cp;
   const isMateScore = Number.isFinite(bestScore) && bestScore >= 90000;
-  if (san.includes("#") || fullLineSan.includes("#") || isMateScore) motifs.add("checkmate");
   if (san.includes("+") && !san.includes("#") && !isMateScore) motifs.add("check");
-  if (san.includes("=")) motifs.add("promotion");
-  if (/[a-h][18][a-h][18][nbrqeh]/i.test(first)) motifs.add("promotion");
+  if (isFirstMovePromotion(puzzle)) motifs.add("promotion");
   if (san.includes("/H") || san.includes("/E") || /[HE]/.test(san)) motifs.add("fairy-piece");
   if (first.length >= 5 && (first[4] === "h" || first[4] === "e")) motifs.add("gating");
   if (san && !san.includes("x") && !san.includes("+") && !san.includes("#")) motifs.add("quiet-move");
-  if (!motifs.size) motifs.add("advantage");
+  if (fullLineSan.includes("+") && !isMateScore) motifs.add("check");
   return [...motifs].sort();
 }
-
+function isFirstMovePromotion(puzzle) {
+  const move = (puzzle.solution || [""])[0] || "";
+  if (move.length < 5 || !/[18]/.test(move[3])) return false;
+  const placement = String(puzzle.fen || "").split(/[ []/, 1)[0];
+  let file = 0;
+  let rank = 8;
+  const board = {};
+  for (const char of placement) {
+    if (char === "/") { rank -= 1; file = 0; continue; }
+    if (/\d/.test(char)) { file += Number(char); continue; }
+    board[`${String.fromCharCode(97 + file)}${rank}`] = char;
+    file += 1;
+  }
+  return String(board[move.slice(0, 2)] || "").toLowerCase() === "p";
+}
 function scoreMotif(puzzle) {
   const score = puzzle.scores?.best_cp;
   if (Number.isFinite(score) && score >= 600) return "crushing";
@@ -1450,9 +1542,8 @@ function scoreMotif(puzzle) {
 function categorySummary(puzzle) {
   const cats = puzzle.categories || {};
   const motifs = (cats.motifs || []).map(labelText).join(", ");
-  return `Categories: ${labelText(cats.phase)}, ${labelText(cats.length)}, ${labelText(cats.source)}${motifs ? `, ${motifs}` : ""}. `;
+  return `Categories: ${labelText(cats.phase)}, ${labelText(cats.evaluation)}, ${labelText(cats.length)}, ${labelText(cats.source)}${motifs ? `, ${motifs}` : ""}. `;
 }
-
 function labelText(value) {
   const labels = {
     "perpetual-check": "Perpetual Check / Threefold",
@@ -1465,52 +1556,223 @@ function labelText(value) {
     .join(" ");
 }
 
-function toggleSuggestionPanel() {
-  controls.suggestPanel.classList.toggle("hidden");
-  if (!controls.suggestPanel.classList.contains("hidden")) controls.suggestFen.focus();
+function openSuggestionEditor() {
+  state.editor = null;
+  controls.editorNotes.value = "";
+  setEditorFen(emptyEditorFen());
+  controls.editor.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  controls.editorFen.focus();
 }
 
-async function submitSuggestion() {
-  const fen = controls.suggestFen.value.trim();
-  const notes = controls.suggestNotes.value.trim();
-  if (!fen) {
-    setSuggestionStatus("Please enter a FEN first.", "bad");
-    return;
+function closeSuggestionEditor() {
+  state.editor = null;
+  controls.editor.classList.add("hidden");
+  document.body.style.overflow = "";
+  setStatus(state.solved ? "Solved." : "Find the only move.", state.solved ? "good" : "");
+}
+
+function emptyEditorFen() {
+  return "8/8/8/8/8/8/8/8[] w - - 0 1";
+}
+
+function startEditorFen() {
+  return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR[HEhe] w KQCDGkqbcdfg - 0 1";
+}
+
+function setEditorFen(fen) {
+  const parsed = parseEditorFen(fen);
+  if (!parsed) {
+    setEditorStatus("The FEN needs eight valid ranks and all six FEN fields.", "bad");
+    return false;
   }
-  if (!looksLikeFen(fen)) {
-    setSuggestionStatus("This does not look like a full FEN yet.", "bad");
-    return;
-  }
-  const suggestion = {
-    fen,
-    notes,
-    page: window.location.href,
-    website: "",
-    created_at: new Date().toISOString(),
+  state.editor = parsed;
+  controls.editorFen.value = serializeEditorFen(parsed);
+  updateEditorFields();
+  renderEditorPalette();
+  renderEditorBoard();
+  setEditorStatus("", "");
+  return true;
+}
+
+function parseEditorFen(fen) {
+  const fields = String(fen || "").trim().split(/\s+/);
+  if (fields.length < 6 || !/^[wb]$/.test(fields[1])) return null;
+  const placement = fields[0];
+  const boardPlacementText = placement.split("[")[0];
+  const pocketMatch = placement.match(/\[([^\]]*)\]/);
+  const ranks = boardPlacementText.split("/");
+  if (ranks.length !== 8 || !ranks.every(validEditorRank)) return null;
+  const board = parseFenBoard(`${boardPlacementText}[] ${fields.slice(1).join(" ")}`);
+  return {
+    board,
+    side: fields[1],
+    pocket: pocketMatch ? pocketMatch[1] : "",
+    castling: fields[2] || "-",
+    ep: fields[3] || "-",
+    halfmove: Math.max(0, Number.parseInt(fields[4], 10) || 0),
+    fullmove: Math.max(1, Number.parseInt(fields[5], 10) || 1),
+    selectedPiece: "P",
   };
-  controls.suggestSubmit.disabled = true;
-  setSuggestionStatus("Sending suggestion...", "");
-  try {
-    const response = await fetch(suggestionApiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(suggestion),
+}
+
+function validEditorRank(rank) {
+  let squares = 0;
+  for (const char of rank) {
+    if (/^[1-8]$/.test(char)) squares += Number(char);
+    else if (/^[prnbqkhePRNBQKHE]$/.test(char)) squares += 1;
+    else return false;
+  }
+  return squares === 8;
+}
+
+function serializeEditorFen(editor) {
+  return `${editorPlacement(editor.board)}[${editor.pocket || ""}] ${editor.side} ${editor.castling || "-"} ${editor.ep || "-"} ${editor.halfmove} ${editor.fullmove}`;
+}
+
+function editorPlacement(board) {
+  const ranks = [];
+  for (let rank = 8; rank >= 1; rank -= 1) {
+    let empty = 0;
+    let row = "";
+    for (const file of files) {
+      const piece = board[`${file}${rank}`];
+      if (piece) {
+        if (empty) row += String(empty);
+        row += piece;
+        empty = 0;
+      } else {
+        empty += 1;
+      }
+    }
+    if (empty) row += String(empty);
+    ranks.push(row);
+  }
+  return ranks.join("/");
+}
+
+function updateEditorFields() {
+  const editor = state.editor;
+  if (!editor) return;
+  controls.editorSide.value = editor.side;
+  controls.editorPocket.value = editor.pocket;
+  controls.editorCastling.value = editor.castling;
+  controls.editorEp.value = editor.ep;
+  controls.editorHalfmove.value = editor.halfmove;
+  controls.editorFullmove.value = editor.fullmove;
+}
+
+function syncEditorFromFenInput() {
+  const parsed = parseEditorFen(controls.editorFen.value);
+  if (!parsed) {
+    setEditorStatus("Complete the FEN to update the board.", "bad");
+    return;
+  }
+  parsed.selectedPiece = state.editor?.selectedPiece || "P";
+  state.editor = parsed;
+  updateEditorFields();
+  renderEditorPalette();
+  renderEditorBoard();
+  setEditorStatus("", "");
+}
+
+function syncEditorFen() {
+  const editor = state.editor;
+  if (!editor) return;
+  editor.side = controls.editorSide.value === "b" ? "b" : "w";
+  editor.pocket = controls.editorPocket.value.replace(/[^HEhe]/g, "");
+  editor.castling = controls.editorCastling.value.trim() || "-";
+  editor.ep = controls.editorEp.value.trim() || "-";
+  editor.halfmove = Math.max(0, Number.parseInt(controls.editorHalfmove.value, 10) || 0);
+  editor.fullmove = Math.max(1, Number.parseInt(controls.editorFullmove.value, 10) || 1);
+  controls.editorFen.value = serializeEditorFen(editor);
+  renderEditorBoard();
+}
+
+function renderEditorPalette() {
+  const editor = state.editor;
+  if (!editor) return;
+  controls.editorPalette.innerHTML = "";
+  for (const piece of ["K", "Q", "R", "B", "N", "H", "E", "P", "k", "q", "r", "b", "n", "h", "e", "p", ""]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.title = piece ? `Place ${piece}` : "Erase piece";
+    button.classList.toggle("active", editor.selectedPiece === piece);
+    if (piece) button.appendChild(pieceImage(piece));
+    else { button.className = "erase-piece"; button.textContent = "x"; }
+    button.addEventListener("click", () => {
+      editor.selectedPiece = piece;
+      renderEditorPalette();
+      renderEditorBoard();
     });
+    controls.editorPalette.appendChild(button);
+  }
+}
+
+function renderEditorBoard() {
+  const editor = state.editor;
+  if (!editor) return;
+  controls.editorBoard.innerHTML = "";
+  for (const rank of [8, 7, 6, 5, 4, 3, 2, 1]) {
+    for (const file of files) {
+      const square = `${file}${rank}`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `square ${squareColor(square)}`;
+      button.dataset.square = square;
+      if (editor.selectedSquare === square) button.classList.add("selected");
+      const piece = editor.board[square];
+      if (piece) button.appendChild(pieceImage(piece));
+      if (file === "a" || rank === 1) {
+        const coord = document.createElement("span");
+        coord.className = "coord";
+        coord.textContent = square;
+        button.appendChild(coord);
+      }
+      button.addEventListener("click", () => {
+        if (editor.selectedPiece) editor.board[square] = editor.selectedPiece;
+        else delete editor.board[square];
+        editor.selectedSquare = square;
+        controls.editorFen.value = serializeEditorFen(editor);
+        renderEditorBoard();
+      });
+      controls.editorBoard.appendChild(button);
+    }
+  }
+}
+
+function editorHasBothKings(editor) {
+  const pieces = Object.values(editor?.board || {});
+  return pieces.filter((piece) => piece === "K").length === 1 && pieces.filter((piece) => piece === "k").length === 1;
+}
+async function submitEditorSuggestion() {
+  const editor = state.editor;
+  const fen = editor ? serializeEditorFen(editor) : "";
+  if (!looksLikeFen(fen) || !editorHasBothKings(editor)) {
+    setEditorStatus("The position needs a complete FEN with both kings.", "bad");
+    return;
+  }  const suggestion = { fen, notes: controls.editorNotes.value.trim(), page: window.location.href, website: "", created_at: new Date().toISOString() };
+  controls.editorDone.disabled = true;
+  setEditorStatus("Sending suggestion...", "");
+  try {
+    const response = await fetch(suggestionApiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(suggestion) });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     const suggestions = readSuggestions();
     suggestions.push({ ...suggestion, remote_id: payload.id });
     localStorage.setItem(suggestionStorageKey, JSON.stringify(suggestions));
-    setSuggestionStatus("Suggestion sent. Thank you!", "good");
-    controls.suggestFen.value = "";
-    controls.suggestNotes.value = "";
+    closeSuggestionEditor();
   } catch (error) {
-    setSuggestionStatus(`Could not send suggestion: ${error.message}`, "bad");
+    setEditorStatus(`Could not send suggestion: ${error.message}`, "bad");
   } finally {
-    controls.suggestSubmit.disabled = false;
+    controls.editorDone.disabled = false;
   }
 }
 
+function setEditorStatus(text, cls = "") {
+  controls.editorStatus.textContent = text;
+  controls.editorStatus.className = `suggest-status ${cls}`.trim();
+}
 function looksLikeFen(fen) {
   const fields = fen.split(/\s+/);
   return fields.length >= 6 && fields[0].includes("/") && /^[wb]$/.test(fields[1]);
@@ -1570,6 +1832,61 @@ function applySavedTheme() {
   document.body.classList.toggle("dark-mode", dark);
 }
 
+function toggleHelpMode() {
+  state.helpMode = !state.helpMode;
+  document.body.classList.toggle("help-mode", state.helpMode);
+  controls.help.classList.toggle("active", state.helpMode);
+  controls.help.setAttribute("aria-pressed", String(state.helpMode));
+  if (!state.helpMode) hideHelpTooltip();
+}
+
+function helpTargetFromNode(node) {
+  return node instanceof Element ? node.closest("[data-help]") : null;
+}
+
+function onHelpPointerOver(event) {
+  if (!state.helpMode) return;
+  const target = helpTargetFromNode(event.target);
+  if (!target || target === state.helpTarget) return;
+  state.helpTarget = target;
+  showHelpTooltip(target, event.clientX, event.clientY);
+}
+
+function onHelpPointerOut(event) {
+  const target = helpTargetFromNode(event.target);
+  if (!target || target !== state.helpTarget || target.contains(event.relatedTarget)) return;
+  hideHelpTooltip();
+}
+
+function onHelpPointerMove(event) {
+  if (state.helpMode && state.helpTarget) positionHelpTooltip(event.clientX, event.clientY);
+}
+
+function showHelpTooltip(target, clientX, clientY) {
+  if (!helpTooltipEl) return;
+  helpTooltipEl.textContent = target.dataset.help || "";
+  helpTooltipEl.classList.remove("hidden");
+  positionHelpTooltip(clientX, clientY);
+}
+
+function hideHelpTooltip() {
+  state.helpTarget = null;
+  helpTooltipEl?.classList.add("hidden");
+}
+
+function positionHelpTooltip(clientX, clientY) {
+  if (!helpTooltipEl || helpTooltipEl.classList.contains("hidden")) return;
+  const padding = 10;
+  helpTooltipEl.style.left = `${padding}px`;
+  helpTooltipEl.style.top = `${padding}px`;
+  const rect = helpTooltipEl.getBoundingClientRect();
+  const left = Math.max(padding, Math.min(clientX + 14, window.innerWidth - rect.width - padding));
+  let top = clientY + 16;
+  if (top + rect.height > window.innerHeight - padding) top = clientY - rect.height - 16;
+  top = Math.max(padding, top);
+  helpTooltipEl.style.left = `${left}px`;
+  helpTooltipEl.style.top = `${top}px`;
+}
 function toggleTheme() {
   const dark = !document.body.classList.contains("dark-mode");
   document.body.classList.toggle("dark-mode", dark);

@@ -175,3 +175,49 @@ kbd { display: inline-block; margin-left: 5px; padding: 1px 5px; border: 1px sol
   .board-shell { width: 100%; }
   .detail-options { left: 0; }
 }
+
+.suggest-editor { position: fixed; inset: 0; z-index: 100; overflow: auto; padding: 20px; background: rgba(15, 18, 20, .72); }
+.suggest-editor-shell { width: min(1120px, 100%); margin: auto; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 24px 72px rgba(0,0,0,.4); }
+.suggest-editor-head { display: flex; justify-content: space-between; gap: 14px; align-items: start; margin-bottom: 16px; }
+.suggest-editor-head h1 { margin-bottom: 0; }
+.suggest-editor-layout { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(290px, 380px); gap: 20px; align-items: start; }
+.editor-board { width: min(76vmin, 680px); max-width: 100%; justify-self: center; }
+.editor-tools { display: grid; gap: 14px; }
+.editor-tools > label, .editor-fields label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 700; }
+.editor-tools textarea, .editor-tools input, .editor-tools select { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--button); color: var(--ink); padding: 8px 10px; font: inherit; }
+.editor-tools textarea { resize: vertical; }
+.editor-label { margin: 0 0 7px; color: var(--muted); font-size: 13px; font-weight: 700; }
+.editor-palette { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.editor-palette button { min-height: 44px; padding: 3px; display: grid; place-items: center; }
+.editor-palette .piece { width: 34px; height: 34px; }
+.editor-palette .erase-piece { font-size: 22px; font-weight: 800; }
+.editor-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.editor-actions { display: flex; gap: 8px; }
+.editor-actions button { flex: 1; }
+.editor-finish { margin-top: 2px; }
+.editor-finish .primary { margin: 0; }
+.editor-board .square { cursor: crosshair; }
+.editor-board .square.selected { outline-color: var(--accent); }
+@media (max-width: 760px) {
+  .suggest-editor { padding: 0; }
+  .suggest-editor-shell { min-height: 100vh; border: 0; border-radius: 0; padding: 14px; }
+  .suggest-editor-layout { grid-template-columns: 1fr; gap: 16px; }
+  .editor-board { width: 100%; }
+  .editor-palette { grid-template-columns: repeat(7, minmax(38px, 1fr)); overflow-x: auto; }
+}
+.icon-button { display: grid; place-items: center; }
+.theme-icon { width: 20px; height: 20px; border: 1px solid var(--ink); background: linear-gradient(135deg, #f4f1ea 0 50%, #151718 50% 100%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent); }
+.dice-icon { width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 4px; background:
+  radial-gradient(circle at 28% 28%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 72% 28%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 50% 50%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 28% 72%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 72% 72%, currentColor 0 1.7px, transparent 2px); }
+.help-button { font: 800 17px/1 system-ui, sans-serif; }
+body.help-mode [data-help] { outline: 1px dashed var(--accent-2); outline-offset: 2px; }
+.help-tooltip { position: fixed; z-index: 500; width: min(280px, calc(100vw - 20px)); padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--ink); color: var(--panel); box-shadow: 0 8px 20px var(--shadow); font: 600 12px/1.35 system-ui, sans-serif; text-align: left; overflow-wrap: anywhere; pointer-events: none; }
+.detail-options .motif-chip { padding: 5px 8px; font-size: 12px; color: var(--ink); }
+.detail-options .motif-chip.include { border-color: var(--good); background: color-mix(in srgb, var(--good) 18%, var(--button)); }
+.detail-options .motif-chip.exclude { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 16%, var(--button)); text-decoration: line-through; }
+
+.detail-options .detail-hint { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
