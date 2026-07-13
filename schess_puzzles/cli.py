@@ -329,6 +329,7 @@ def main() -> None:
     enrich_mate_lines.add_argument("--depth", type=int, default=20)
     enrich_mate_lines.add_argument("--multipv", type=int, default=5)
     enrich_mate_lines.add_argument("--max-records", type=int, default=0)
+    enrich_mate_lines.add_argument("--puzzle-id", action="append", default=[], help="Only enrich these stable web puzzle ID(s).")
     enrich_mate_lines.add_argument("--eval-cache-dir", type=Path, default=Path("data/cache/evals/mate_lines"))
     review_html = subparsers.add_parser("review-html")
     review_html.add_argument("report_jsonl", type=Path)
@@ -2128,6 +2129,12 @@ def _enrich_mate_lines(config_path: Path, args: argparse.Namespace) -> None:
             if not line.strip():
                 continue
             record = _enrich_report_record(json.loads(line))
+            selected_ids = {str(value).lower() for value in args.puzzle_id}
+            if selected_ids and _web_puzzle_id(record).lower() not in selected_ids:
+                records.append(record)
+                skipped += 1
+                continue
+
             if args.max_records and checked >= args.max_records:
                 records.append(record)
                 skipped += 1
@@ -2141,6 +2148,7 @@ def _enrich_mate_lines(config_path: Path, args: argparse.Namespace) -> None:
                 record.pop("bonus_mate_start_fen", None)
                 record.pop("bonus_mate_line_san", None)
                 record.pop("bonus_mate_alternative_first_moves", None)
+                record.pop("bonus_mate_alternatives", None)
                 records.append(record)
                 skipped += 1
                 continue
@@ -2167,13 +2175,19 @@ def _enrich_mate_lines(config_path: Path, args: argparse.Namespace) -> None:
                         record["bonus_mate_start_fen"] = start_fen
                         record["bonus_mate_line"] = list(best.pv)
                         record["bonus_mate_line_san"] = san
-                        record["bonus_mate_alternative_first_moves"] = _mate_alternative_first_moves(
+                        solver_side = record.get("side") or (record.get("fen", "").split()[1] if len(record.get("fen", "").split()) > 1 else "w")
+                        alternatives = _mate_alternatives(
                             start_fen,
-                            record.get("side") or (record.get("fen", "").split()[1] if len(record.get("fen", "").split()) > 1 else "w"),
+                            solver_side,
                             best.pv,
-                            evals,
                             engine,
                             selector_config,
+                        )
+                        first_solver_ply = 0 if fields[1] == solver_side else 1
+                        record["bonus_mate_alternatives"] = alternatives
+                        record["bonus_mate_alternative_first_moves"] = next(
+                            (entry["moves"] for entry in alternatives if entry["ply"] == first_solver_ply),
+                            [],
                         )
                         enriched += 1
             except Exception as exc:
@@ -2200,6 +2214,46 @@ def _line_reaches_mate(fen: str, line: list[str]) -> bool:
     san = _web_line_san_for_fen(fen, line)
     return "#" in san
 
+
+def _mate_alternatives(start_fen: str, solver_side: str, pv: list[str], engine, config: SelectionConfig) -> list[dict]:
+    """Store equal-speed mating alternatives at each solver turn of one PV."""
+    import pyffish
+    from .selector import PositionRecord
+
+    current = start_fen
+    alternatives: list[dict] = []
+    for ply, canonical_move in enumerate(pv):
+        fields = current.split()
+        side_to_move = fields[1] if len(fields) > 1 else solver_side
+        if side_to_move == solver_side:
+            try:
+                position = PositionRecord(
+                    ply=0,
+                    move_number=int(fields[-1]) if len(fields) >= 6 and fields[-1].isdigit() else 0,
+                    side=side_to_move,
+                    fen=current,
+                    variant="seirawan",
+                    site="",
+                    previous_move=None,
+                    previous_uci=None,
+                )
+                evals = evaluate_position(position, engine, config)
+                if evals:
+                    best_score = evals[0].score_cp
+                    moves = [
+                        {"uci": item.move, "san": item.san}
+                        for item in evals
+                        if item.move != canonical_move and item.score_cp == best_score and abs(item.score_cp) >= 90000
+                    ]
+                    if moves:
+                        alternatives.append({"ply": ply, "moves": moves})
+            except Exception:
+                pass
+        try:
+            current = pyffish.get_fen("seirawan", current, [canonical_move])
+        except Exception:
+            break
+    return alternatives
 
 def _mate_alternative_first_moves(start_fen: str, solver_side: str, pv: list[str], evals, engine, config: SelectionConfig) -> list[dict]:
     import pyffish
@@ -2409,6 +2463,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
                     "mate_start_fen": mate_start_fen,
                     "mate_line_san": mate_line_san,
                     "mate_alternative_first_moves": record.get("bonus_mate_alternative_first_moves", []),
+                    "mate_alternatives": record.get("bonus_mate_alternatives", []),
                     "source_url": record.get("source"),
                     "reason": record.get("reason"),
                     "scores": {

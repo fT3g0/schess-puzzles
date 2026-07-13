@@ -208,11 +208,12 @@ kbd { display: inline-block; margin-left: 5px; padding: 1px 5px; border: 1px sol
 .icon-button { display: grid; place-items: center; }
 .theme-icon { width: 20px; height: 20px; border: 1px solid var(--ink); background: linear-gradient(135deg, #f4f1ea 0 50%, #151718 50% 100%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent); }
 .dice-icon { width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 4px; background:
-  radial-gradient(circle at 28% 28%, currentColor 0 1.7px, transparent 2px),
-  radial-gradient(circle at 72% 28%, currentColor 0 1.7px, transparent 2px),
-  radial-gradient(circle at 50% 50%, currentColor 0 1.7px, transparent 2px),
-  radial-gradient(circle at 28% 72%, currentColor 0 1.7px, transparent 2px),
-  radial-gradient(circle at 72% 72%, currentColor 0 1.7px, transparent 2px); }
+  radial-gradient(circle at 28% 24%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 72% 24%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 28% 50%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 72% 50%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 28% 76%, currentColor 0 1.7px, transparent 2px),
+  radial-gradient(circle at 72% 76%, currentColor 0 1.7px, transparent 2px); }
 .help-button { font: 800 17px/1 system-ui, sans-serif; }
 body.help-mode [data-help] { outline: 1px dashed var(--accent-2); outline-offset: 2px; }
 .help-tooltip { position: fixed; z-index: 500; width: min(280px, calc(100vw - 20px)); padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--ink); color: var(--panel); box-shadow: 0 8px 20px var(--shadow); font: 600 12px/1.35 system-ui, sans-serif; text-align: left; overflow-wrap: anywhere; pointer-events: none; }
@@ -221,3 +222,5 @@ body.help-mode [data-help] { outline: 1px dashed var(--accent-2); outline-offset
 .detail-options .motif-chip.exclude { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 16%, var(--button)); text-decoration: line-through; }
 
 .detail-options .detail-hint { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
+
+.board { touch-action: none; }

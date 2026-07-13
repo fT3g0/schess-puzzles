@@ -9,6 +9,8 @@ const state = {
   solved: false,
   pendingChoice: null,
   dragFrom: null,
+  pointerDrag: null,
+  suppressBoardClickUntil: 0,
   showUnmoved: false,
   pocket: "",
   gatingSquares: new Set(),
@@ -21,6 +23,7 @@ const state = {
   curatedLevel: "beginner",
   editor: null,
   helpMode: false,
+  advanceAfterFilter: false,
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -152,6 +155,9 @@ function bindControls() {
   document.addEventListener("pointerover", onHelpPointerOver);
   document.addEventListener("pointerout", onHelpPointerOut);
   document.addEventListener("pointermove", onHelpPointerMove);
+  document.addEventListener("pointermove", onPointerDragMove);
+  document.addEventListener("pointerup", onPointerDragEnd);
+  document.addEventListener("pointercancel", cancelPointerDrag);
   for (const input of [controls.phase, controls.evaluation, controls.motif, controls.length, controls.source]) {
     input.addEventListener("change", onFilterControlChanged);
   }  for (const select of [controls.phase, controls.evaluation, controls.motif, controls.length]) {
@@ -274,7 +280,7 @@ function fillDetailOptions(container, values, preferred = [], group) {
     checkbox.checked = true;
     checkbox.dataset.categoryGroup = group;
     checkbox.value = value;
-    checkbox.addEventListener("change", applyFilters);
+    checkbox.addEventListener("change", onDetailedFilterChanged);
     label.appendChild(checkbox);
     label.appendChild(document.createTextNode(labelText(value)));
     container.appendChild(label);
@@ -327,6 +333,7 @@ function motifChipSets(container) {
   return { include, exclude };
 }
 function onFilterControlChanged(event) {
+  state.advanceAfterFilter = state.solved;
   const select = event?.target;
   if (select?.value === "__detail") {
     state.openDetailFilter = detailGroupForSelect(select);
@@ -339,6 +346,10 @@ function onFilterControlChanged(event) {
   applyFilters();
 }
 
+function onDetailedFilterChanged() {
+  state.advanceAfterFilter = state.solved;
+  applyFilters();
+}
 function closeDetailFilterForContainer(container) {
   if (container === detailContainerForGroup(state.openDetailFilter)) {
     state.openDetailFilter = "";
@@ -418,6 +429,9 @@ function updateCuratedLevelTabs() {
 }
 
 function applyFilters() {
+  const previousPuzzle = currentPuzzle();
+  const advanceAfterFilter = state.advanceAfterFilter;
+  state.advanceAfterFilter = false;
   updateDetailFilterVisibility();
   updatePuzzleSetTabs();
   const phaseSet = checkedDetailValues(controls.phaseDetail);
@@ -447,6 +461,10 @@ function applyFilters() {
     const filteredIndex = state.filtered.findIndex((puzzle) => puzzle.id === requested.id);
     if (filteredIndex >= 0) { state.index = filteredIndex; } else { state.filtered = [requested]; state.index = 0; }
     state.requestedPuzzleId = "";
+  } else if (advanceAfterFilter && state.filtered.length) {
+    const previousIndex = state.filtered.findIndex((puzzle) => puzzle.id === previousPuzzle?.id);
+    if (previousIndex >= 0) state.index = (previousIndex + 1) % state.filtered.length;
+    else state.index = Math.min(state.index, Math.max(0, state.filtered.length - 1));
   } else if (state.randomizeInitialPuzzle && state.filtered.length) {
     state.index = Math.floor(Math.random() * state.filtered.length);
     state.randomizeInitialPuzzle = false;
@@ -579,7 +597,8 @@ function renderBoard() {
       button.dataset.square = square;
       button.addEventListener("click", () => onSquare(square));
       const piece = state.board[square];
-      button.draggable = Boolean(piece) && !state.solved;
+      button.draggable = Boolean(piece) && !state.solved && !supportsPointerDrag();
+      button.addEventListener("pointerdown", (event) => onPointerDragStart(event, square));
       button.addEventListener("dragstart", (event) => onDragStart(event, square));
       button.addEventListener("dragover", onDragOver);
       button.addEventListener("dragenter", (event) => onDragEnter(event, square));
@@ -744,6 +763,10 @@ function pieceImage(piece) {
   return img;
 }
 
+function supportsPointerDrag() {
+  return typeof window.PointerEvent === "function";
+}
+
 function onDragStart(event, square) {
   if (state.solved || !state.board[square]) {
     event.preventDefault();
@@ -793,8 +816,43 @@ function onDragEnd(event) {
   state.selected = null;
   renderBoard();
 }
+function onPointerDragStart(event, square) {
+  if (!supportsPointerDrag() || state.solved || !state.board[square] || event.button !== 0) return;
+  state.pointerDrag = { from: square, startX: event.clientX, startY: event.clientY, moved: false };
+}
+
+function onPointerDragMove(event) {
+  const drag = state.pointerDrag;
+  if (!drag || state.solved) return;
+  const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+  if (distance < 7 && !drag.moved) return;
+  drag.moved = true;
+  event.preventDefault();
+  document.querySelectorAll(".drag-target").forEach((square) => square.classList.remove("drag-target"));
+  const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".square");
+  if (target?.dataset.square && target.dataset.square !== drag.from) target.classList.add("drag-target");
+}
+
+function onPointerDragEnd(event) {
+  const drag = state.pointerDrag;
+  if (!drag) return;
+  state.pointerDrag = null;
+  document.querySelectorAll(".drag-target").forEach((square) => square.classList.remove("drag-target"));
+  if (!drag.moved) return;
+  event.preventDefault();
+  state.suppressBoardClickUntil = Date.now() + 250;
+  const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".square");
+  const to = target?.dataset.square;
+  if (to && to !== drag.from) tryUserMove(drag.from, to);
+  else renderBoard();
+}
+
+function cancelPointerDrag() {
+  state.pointerDrag = null;
+  document.querySelectorAll(".drag-target").forEach((square) => square.classList.remove("drag-target"));
+}
 function onSquare(square) {
-  if (state.solved) return;
+  if (Date.now() < state.suppressBoardClickUntil || state.solved) return;
   if (!state.selected) {
     if (!state.board[square]) return;
     state.selected = square;
@@ -833,12 +891,16 @@ function tryUserMove(from, to) {
   }
 
   if (!matchesExpectedPrefix) {
+    const alternative = bonusMateAlternativeForPrefix(userPrefix);
+    if (alternative) {
+      acceptMateAlternative(alternative);
+      return;
+    }
     setBoardFeedback("bad");
     setStatus(state.matePlayOut ? "That is not the fastest checkmate line." : "That is not the tactic move.", "bad");
     renderBoard();
     return;
   }
-
   if (choices.length) {
     showMoveChoices(userPrefix, expected, choices);
     renderBoard();
@@ -1019,7 +1081,7 @@ function isPseudoLegalMove(from, to) {
   const role = piece.toUpperCase();
   const forward = piece === piece.toUpperCase() ? 1 : -1;
 
-  if (isCastleMovePrefix(`${from}${to}`)) return role === "K" || role === "R";
+  if (isCastleMovePrefix(`${from}${to}`)) return Boolean(castleMove(from, to, piece, ""));
   const target = state.board[to];
   if (target && sameColor(piece, target)) return false;
   if (role === "P") {
@@ -1224,7 +1286,7 @@ function autoReplies() {
     finishActiveLine();
     return;
   }
-  if (state.ply % 2 === 1) {
+  if (currentSideToMove() !== puzzle.side) {
     applyMove(line[state.ply]);
     renderReserve();
     state.ply += 1;
@@ -1297,12 +1359,37 @@ function autoStartMateDefense() {
   setStatus("Find the fastest checkmate continuation.");
 }
 
-function bonusMateAlternativeMatches(userPrefix) {
-  const puzzle = currentPuzzle();
-  if (!state.matePlayOut || !puzzle || currentSideToMove() !== puzzle.side) return false;
-  return (puzzle.mate_alternative_first_moves || []).some((move) => moveMatchesPrefix(move.uci || "", userPrefix));
+function firstMateSolverPly(puzzle) {
+  return sideFromFen(puzzle?.mate_start_fen || "") === puzzle?.side ? 0 : 1;
 }
 
+function mateAlternativesAtCurrentPly(puzzle) {
+  if (!puzzle || !state.matePlayOut) return [];
+  const detailed = (puzzle.mate_alternatives || []).find((entry) => entry.ply === state.ply);
+  if (detailed?.moves) return detailed.moves;
+  if (state.ply === firstMateSolverPly(puzzle)) return puzzle.mate_alternative_first_moves || [];
+  return [];
+}
+
+function bonusMateAlternativeForPrefix(userPrefix) {
+  const puzzle = currentPuzzle();
+  if (!state.matePlayOut || !puzzle || currentSideToMove() !== puzzle.side) return null;
+  return mateAlternativesAtCurrentPly(puzzle).find((move) => moveMatchesPrefix(move.uci || "", userPrefix)) || null;
+}
+
+function acceptMateAlternative(alternative) {
+  const puzzle = currentPuzzle();
+  const canonicalSan = (puzzle?.mate_line_san || "").split(/\s+/)[state.ply] || "the stored move";
+  applyMove(alternative.uci);
+  state.ply += 1;
+  state.solved = true;
+  clearMoveChoices();
+  setBoardFeedback("good");
+  setStatus(`Correct alternative solution. Our variation is ${canonicalSan}.`, "good");
+  showAnalysisLink();
+  renderReserve();
+  renderBoard();
+}
 function markSolved() {
   state.solved = true;
   setBoardFeedback("good");
@@ -1363,9 +1450,13 @@ function castleMove(from, to, piece, suffix) {
     e8c8: ["e8", "c8", "a8", "d8", "e8"],
     a8e8: ["e8", "c8", "a8", "d8", "a8"],
   };
-  return table[`${from}${to}`] || null;
+  const castle = table[`${from}${to}`];
+  if (!castle) return null;
+  const [kingFrom, , rookFrom] = castle;
+  const king = white ? "K" : "k";
+  const rook = white ? "R" : "r";
+  return state.board[kingFrom] === king && state.board[rookFrom] === rook ? castle : null;
 }
-
 function rookCastleEncoding(from, to, white) {
   return white ? ["h1e1", "a1e1"].includes(`${from}${to}`) : ["h8e8", "a8e8"].includes(`${from}${to}`);
 }
@@ -1401,12 +1492,11 @@ function revealSolution() {
   showMatePlayOutButton();
   const scores = puzzle.scores || {};
   const categories = puzzleCategoryLabels(puzzle);
-  const line = puzzle.solution_line_san || (puzzle.solution || []).join(" ");
+  const line = formatSolutionLine(puzzle);
   const second = scores.second_san ? `${cp(scores.second_cp)} (${scores.second_san})` : cp(scores.second_cp);
   lineEl.innerHTML = `
     <div class="solution-row"><span class="solution-label">Correct move</span><span>${escapeHtml(puzzle.solution_san || (puzzle.solution || [])[0] || "-")}</span></div>
     <div class="solution-row"><span class="solution-label">Full line</span><span class="solution-line">${escapeHtml(line || "-")}</span></div>
-    <div class="solution-row"><span class="solution-label">FEN</span><span class="solution-line">${escapeHtml(puzzle.fen || "-")}</span></div>
   `;
   detailsEl.innerHTML = `
     <p>${escapeHtml(puzzle.reason || puzzle.kind || "Tactic")}.</p>
@@ -1416,6 +1506,22 @@ function revealSolution() {
   showAnalysisLink();
 }
 
+function formatSolutionLine(puzzle) {
+  const san = String(puzzle.solution_line_san || "").trim().split(/\s+/).filter(Boolean);
+  if (!san.length) return "";
+  let side = puzzle.side || "w";
+  let moveNumber = 1;
+  return san.map((move, index) => {
+    if (side === "w") {
+      side = "b";
+      return `${moveNumber}.${move}`;
+    }
+    const prefix = index === 0 ? `${moveNumber}...` : "";
+    side = "w";
+    moveNumber += 1;
+    return `${prefix}${move}`;
+  }).join(" ");
+}
 function puzzleCategoryLabels(puzzle) {
   const cats = puzzle.categories || {};
   return [cats.phase, cats.evaluation, cats.length, cats.source, ...(cats.motifs || [])].filter(Boolean).map(labelText);
