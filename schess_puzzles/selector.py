@@ -431,9 +431,14 @@ def find_forcing_replies(
         child_evals = evaluate_position(child_position, engine, config)
         child_selection = classify_position(child_position, child_evals, config)
         if child_selection and child_selection.kind == kind:
+            # Extensions are searched shallowly, but every promising only-move node
+            # must survive the same high-depth confirmation used for the root tactic.
+            confirmed_child = confirm_selection(child_selection, engine, config)
+            if confirmed_child is None or confirmed_child.kind != kind:
+                continue
             gives_check = int(pyffish.gives_check(variant, fen, [reply]))
             check_penalty = gives_check if config.prefer_quiet_replies else 0
-            candidates.append((check_penalty, child_selection.best.score_cp, reply, child_selection.best))
+            candidates.append((check_penalty, confirmed_child.best.score_cp, reply, confirmed_child.best))
 
     _profile_event(
         config,

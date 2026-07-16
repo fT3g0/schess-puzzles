@@ -818,7 +818,15 @@ function onDragEnd(event) {
 }
 function onPointerDragStart(event, square) {
   if (!supportsPointerDrag() || state.solved || !state.board[square] || event.button !== 0) return;
-  state.pointerDrag = { from: square, startX: event.clientX, startY: event.clientY, moved: false };
+  state.pointerDrag = {
+    from: square,
+    piece: state.board[square],
+    source: event.currentTarget,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    ghost: null,
+  };
 }
 
 function onPointerDragMove(event) {
@@ -826,8 +834,13 @@ function onPointerDragMove(event) {
   if (!drag || state.solved) return;
   const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
   if (distance < 7 && !drag.moved) return;
-  drag.moved = true;
+  if (!drag.moved) {
+    drag.moved = true;
+    drag.source?.classList.add("dragging");
+    drag.ghost = createPointerDragGhost(drag.piece, drag.source, event.clientX, event.clientY);
+  }
   event.preventDefault();
+  positionPointerDragGhost(drag.ghost, event.clientX, event.clientY);
   document.querySelectorAll(".drag-target").forEach((square) => square.classList.remove("drag-target"));
   const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".square");
   if (target?.dataset.square && target.dataset.square !== drag.from) target.classList.add("drag-target");
@@ -843,13 +856,41 @@ function onPointerDragEnd(event) {
   state.suppressBoardClickUntil = Date.now() + 250;
   const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".square");
   const to = target?.dataset.square;
+  clearPointerDragVisuals(drag);
   if (to && to !== drag.from) tryUserMove(drag.from, to);
   else renderBoard();
 }
 
 function cancelPointerDrag() {
+  const drag = state.pointerDrag;
   state.pointerDrag = null;
+  clearPointerDragVisuals(drag);
   document.querySelectorAll(".drag-target").forEach((square) => square.classList.remove("drag-target"));
+}
+
+function createPointerDragGhost(piece, source, x, y) {
+  const ghost = document.createElement("div");
+  ghost.className = "drag-ghost";
+  const size = source?.getBoundingClientRect().width || 56;
+  ghost.style.width = `${size}px`;
+  ghost.style.height = `${size}px`;
+  const image = pieceImage(piece);
+  image.alt = "";
+  ghost.appendChild(image);
+  document.body.appendChild(ghost);
+  positionPointerDragGhost(ghost, x, y);
+  return ghost;
+}
+
+function positionPointerDragGhost(ghost, x, y) {
+  if (!ghost) return;
+  ghost.style.left = `${x}px`;
+  ghost.style.top = `${y}px`;
+}
+
+function clearPointerDragVisuals(drag) {
+  drag?.source?.classList.remove("dragging");
+  drag?.ghost?.remove();
 }
 function onSquare(square) {
   if (Date.now() < state.suppressBoardClickUntil || state.solved) return;

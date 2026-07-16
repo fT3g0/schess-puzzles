@@ -86,7 +86,9 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .square.dark { background: var(--dark); }
 .square.selected { outline: 4px solid var(--selected); outline-offset: -4px; }
 .square.choice-target { outline: 4px solid var(--selected); outline-offset: -4px; box-shadow: inset 0 0 0 4px rgba(255,255,255,.28); }
-.square.dragging { opacity: .62; cursor: grabbing; }
+.square.dragging { opacity: .34; cursor: grabbing; }
+.drag-ghost { position: fixed; z-index: 1000; display: grid; place-items: center; pointer-events: none; transform: translate(-50%, -50%) scale(1.06); opacity: .92; filter: drop-shadow(0 3px 4px rgba(0,0,0,.28)); }
+.drag-ghost .piece, .drag-ghost .piece-text { width: 100%; height: 100%; }
 .square.drag-target { outline: 4px solid var(--good); outline-offset: -4px; }
 .square.unmoved { box-shadow: inset 0 0 0 6px rgba(255,210,74,.94), inset 0 0 24px rgba(255,210,74,.55); }
 .square.unmoved::after { content: ""; position: absolute; right: 6px; top: 6px; width: 13px; height: 13px; border-radius: 50%; background: var(--selected); border: 2px solid rgba(0,0,0,.45); }
