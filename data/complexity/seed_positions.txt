@@ -1,0 +1,3 @@
+# label<TAB>FEN
+n3dtk_extension_after_40_exd5	3kh3/r3r3/p1p1b1p1/1p1Pq1H1/1PP5/P1P2QP1/8/R1B3K1[] b - - 0 40
+pawn_race_suggestion	6K1/8/5p2/8/7P/8/8/4k3[] w - - 0 1

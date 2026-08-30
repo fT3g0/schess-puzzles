@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import html
@@ -77,15 +77,28 @@ class ChessComClient:
         game_id = extract_chesscom_variant_game_id(game_id_or_url)
         cookie = cookie or os.getenv("CHESSCOM_COOKIE")
 
-        pgn4 = None
         if cookie:
-            pgn4 = fetch_chesscom_pgn4_from_socket(game_id, cookie, debug=debug_socket, auth_user_id=auth_user_id)
-
-        if pgn4 is None:
+            pgn4 = fetch_chesscom_pgn4_from_socket(
+                game_id,
+                cookie,
+                timeout=10,
+                debug=debug_socket,
+                auth_user_id=auth_user_id,
+            )
+            if pgn4 is None:
+                raise ValueError(
+                    "Authenticated Chess.com PGN4 socket returned no game data; "
+                    "this is usually temporary throttling and can be retried."
+                )
+        else:
             url = f"https://www.chess.com/variants/game/{game_id}"
             response = requests.get(url, timeout=30, headers=_headers())
             response.raise_for_status()
             pgn4 = extract_chesscom_pgn4(response.text)
+
+        valid, reason = validate_chesscom_seirawan_pgn4(pgn4, expected_game_id=game_id)
+        if not valid:
+            raise ValueError(f"Rejected Chess.com PGN4 for game {game_id}: {reason}")
 
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / f"chesscom_{game_id}.pgn4.txt"
@@ -171,7 +184,7 @@ def extract_chesscom_pgn4(page_html: str) -> str:
     # Guest chess.com pages currently render the variants app shell without game data.
     # Authenticated pages may expose PGN4 through app state; this parser is deliberately
     # narrow so a missing endpoint fails loudly instead of saving lossy standard PGN.
-    for pattern in (r"StartFen4", r"\[Variant\s+\"FFA\"\]"):
+    for pattern in (r"StartFen4", r"\[Variant\s+\""):
         if re.search(pattern, page_html):
             start = page_html.find("[GameNr ")
             if start >= 0:
@@ -185,7 +198,7 @@ def extract_chesscom_pgn4(page_html: str) -> str:
 def fetch_chesscom_pgn4_from_socket(
     game_id: str,
     cookie: str,
-    timeout: int = 30,
+    timeout: int = 10,
     debug: bool = False,
     auth_user_id: int | None = None,
 ) -> str | None:
@@ -203,7 +216,15 @@ def fetch_chesscom_pgn4_from_socket(
             print(f"connect-user keys={sorted(connect_data.keys())}")
         ws.send(json.dumps({"action": "connect-user", "data": connect_data, "windowId": window_id}))
         game_join_sent = False
+        import time
+
+        deadline = time.monotonic() + timeout
+        ignored_payloads = 0
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            ws.settimeout(remaining)
             raw = ws.recv()
             message = json.loads(raw)
             mutation = str(message.get("mutation", "")).lower()
@@ -224,14 +245,21 @@ def fetch_chesscom_pgn4_from_socket(
                 game_join_sent = True
                 if debug:
                     print(f"sent game join gameNr={game_id}")
-            data = message.get("data")
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except json.JSONDecodeError:
-                    pass
-            pgn4 = _find_pgn4(data)
-            if pgn4:
+            data = _decode_socket_data(message.get("data"))
+            for pgn4 in _find_pgn4_candidates(data):
+                headers = chesscom_pgn4_headers(pgn4)
+                received_game_id = headers.get("GameNr")
+                if received_game_id != str(game_id):
+                    ignored_payloads += 1
+                    if debug:
+                        print(
+                            "ignored PGN4 payload "
+                            f"gameNr={received_game_id!r} variant={headers.get('Variant')!r}; "
+                            f"expected gameNr={game_id}"
+                        )
+                    continue
+                if debug and ignored_payloads:
+                    print(f"matched requested PGN4 after ignoring {ignored_payloads} unrelated payload(s)")
                 return pgn4
     except websocket.WebSocketTimeoutException:
         return None
@@ -281,6 +309,7 @@ def discover_chesscom_variant_archive(
                 "gameNr": "",
                 "ratingType": rating_type,
                 "title": title,
+                "q": {"ruleVariants": {"seirawanSetup": True}},
                 "page": page,
                 "queryId": query_id,
             }
@@ -314,13 +343,25 @@ def discover_chesscom_variant_archive(
                                         "ratingType",
                                         "variant",
                                         "ruleVariants",
+                                        "q",
                                         "white",
                                         "black",
                                     )
                                     if key in game
                                 }
                                 print(f"archive sample {index}: keys={sorted(game.keys())} values={sample}")
-                    for game in games:
+                    accepted_games = [
+                        game
+                        for game in games
+                        if isinstance(game, dict) and is_chesscom_official_seirawan_archive_game(game)
+                    ]
+                    if debug and len(accepted_games) != len(games):
+                        print(
+                            "archive filter "
+                            f"accepted={len(accepted_games)} rejected_mixed_or_nonstandard="
+                            f"{len(games) - len(accepted_games)}"
+                        )
+                    for game in accepted_games:
                         game_nr = game.get("gameNr")
                         if game_nr is not None:
                             game_ids.append(str(game_nr))
@@ -328,12 +369,40 @@ def discover_chesscom_variant_archive(
                     if data.get("lastPage"):
                         return _unique_preserve_order(game_ids)
                     break
-            if debug and not got_archive_result:
-                print(f"archive page {page} timed out after {archive_timeout}s without a result mutation")
+            if not got_archive_result:
+                raise ValueError(
+                    f"Chess.com archive page {page} did not return a search result within {archive_timeout}s"
+                )
         return _unique_preserve_order(game_ids)
     finally:
         ws.close()
 
+
+_OFFICIAL_SEIRAWAN_RULE_KEYS = frozenset({"enpassant", "play4mate", "promoteto", "seirawansetup"})
+_OFFICIAL_SEIRAWAN_RULE_TOKENS = frozenset({"enpassant", "play4mate", "promoteto=behnqr", "seirawansetup"})
+
+
+def is_chesscom_official_seirawan_archive_game(game: dict) -> bool:
+    """Keep Chess.com's official Seirawan queue, excluding mixed custom variants."""
+    queue = game.get("q")
+    if not isinstance(queue, dict):
+        return False
+    rules = queue.get("ruleVariants")
+    if not isinstance(rules, dict):
+        return False
+    rule_keys = frozenset(str(key).lower() for key in rules)
+    return (
+        queue.get("title") == "Seirawan Chess"
+        and queue.get("variantUrl") == "seirawan-chess"
+        and queue.get("twoPlayerWhiteVsBlack") is True
+        and queue.get("eightByEight") is True
+        and rule_keys == _OFFICIAL_SEIRAWAN_RULE_KEYS
+        and rules.get("seirawanSetup") is True
+    )
+
+
+def is_chesscom_official_seirawan_rules(value: str) -> bool:
+    return frozenset(value.lower().split()) == _OFFICIAL_SEIRAWAN_RULE_TOKENS
 
 def _unique_preserve_order(values: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -515,9 +584,18 @@ def _send_socket(ws, action: str, data: dict, window_id: str) -> None:
 
 
 def _read_socket_messages(ws, timeout: int):
-    ws.settimeout(timeout)
+    """Yield messages until an absolute deadline, not merely an idle timeout."""
+    import time
+
+    deadline = time.monotonic() + timeout
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
         try:
+            # The variants service emits pings while a request is stalled. A
+            # fixed socket timeout would therefore never expire in that case.
+            ws.settimeout(remaining)
             raw = ws.recv()
             if not isinstance(raw, str) or not raw.strip():
                 continue
@@ -537,21 +615,49 @@ def _decode_socket_data(data: object) -> object:
     return data
 
 
-def _find_pgn4(value: object) -> str | None:
+def chesscom_pgn4_headers(pgn4: str) -> dict[str, str]:
+    # StartFen4 spans many physical lines, so header values must be parsed in
+    # DOTALL mode rather than line-by-line.
+    return {
+        key: value
+        for key, value in re.findall(r'^\[([^\s]+)\s+"(.*?)"\]$', pgn4, flags=re.MULTILINE | re.DOTALL)
+    }
+
+
+def validate_chesscom_seirawan_pgn4(pgn4: str, *, expected_game_id: str) -> tuple[bool, str]:
+    """Validate Chess.com's two-player Seirawan PGN4 wrapper.
+
+    Chess.com labels this shared four-player protocol wrapper as ``Variant FFA``
+    even for its official two-player Seirawan queue. The real variant identity
+    therefore lives in RuleVariants and the embedded white-vs-black setup.
+    """
+    headers = chesscom_pgn4_headers(pgn4)
+    if headers.get("GameNr") != str(expected_game_id):
+        return False, f"GameNr was {headers.get('GameNr')!r}, not {expected_game_id!r}"
+
+    rules = headers.get("RuleVariants", "").lower()
+    start_fen4 = headers.get("StartFen4", "")
+    site = headers.get("Site", "").lower()
+    if not is_chesscom_official_seirawan_rules(headers.get("RuleVariants", "")):
+        return False, "RuleVariants was not the official Seirawan rule set"
+    if "'wb':true" not in start_fen4.replace(" ", "").lower():
+        return False, "StartFen4 was not a two-player white-vs-black board"
+    if "/variants/seirawan-chess/" not in site:
+        return False, f"Site was not a Seirawan Chess game URL: {headers.get('Site')!r}"
+    return True, ""
+
+def _find_pgn4_candidates(value: object) -> list[str]:
+    candidates: list[str] = []
     if isinstance(value, dict):
         pgn4 = value.get("pgn4")
         if isinstance(pgn4, str) and "StartFen4" in pgn4:
-            return pgn4
+            candidates.append(pgn4)
         for child in value.values():
-            found = _find_pgn4(child)
-            if found:
-                return found
+            candidates.extend(_find_pgn4_candidates(child))
     elif isinstance(value, list):
         for child in value:
-            found = _find_pgn4(child)
-            if found:
-                return found
-    return None
+            candidates.extend(_find_pgn4_candidates(child))
+    return candidates
 
 
 def extract_chesscom_variant_game_id(value: str) -> str:

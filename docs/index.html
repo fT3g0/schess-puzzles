@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>S-Chess Tactics</title>
-  <link rel="stylesheet" href="styles.css?v=20260712-filters-help-9">
+  <link rel="stylesheet" href="styles.css?v=progress-1">
 </head>
 <body>
   <main class="app">
@@ -47,7 +47,13 @@
         <button id="unmoved" type="button" data-help="Highlight pieces and squares that still allow castling or gating.">Castling &amp; gating options</button>
       </div>
 
-      <div class="filters">
+      <section class="progress-panel" aria-label="Local puzzle progress">
+        <p id="progress-summary" class="progress-summary"></p>
+        <div class="progress-controls">
+          <button id="review-mistakes" type="button" data-help="Show puzzles where you made an incorrect tactic attempt on this browser.">Review mistakes</button>
+          <button id="clear-session" type="button" data-help="Clear only this tab's solved and failed session counters. Saved puzzle history remains.">Clear session</button>
+        </div>
+      </section>      <div class="filters">
         <label data-help="Choose the colors of light and dark board squares.">Board theme <select id="board-theme">
           <option value="wood">Wood</option>
           <option value="wood-muted">Muted wood</option>
@@ -122,6 +128,6 @@
     </div>
   </section>
   <script src="curated-puzzles.js?v=20260712-1"></script>
-  <script src="app.js?v=drag-ghost-1"></script>
+  <script src="app.js?v=progress-1"></script>
 </body>
 </html>

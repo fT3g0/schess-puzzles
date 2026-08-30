@@ -39,3 +39,12 @@ pychess-variants_*
 Thumbs.db
 .wrangler/
 cloudflare/**/.wrangler/
+
+# Downloaded Maia checkpoints
+/maia2_models/
+
+# Local difficulty-research corpora and generated experiment outputs
+/data/policy/
+/data/complexity/*.csv
+/data/complexity/*.md
+!/data/complexity/seed_positions.txt

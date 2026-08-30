@@ -24,6 +24,7 @@ const state = {
   editor: null,
   helpMode: false,
   advanceAfterFilter: false,
+  reviewMistakes: false,
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -43,6 +44,9 @@ const curatedLevels = window.SCHESS_CURATED_LEVELS || {
   expert: [],
 };
 const curatedPuzzleIds = new Set(Object.values(curatedLevels).flat());const suggestionStorageKey = "schess-puzzle-suggestions";
+const progressStorageKey = "schess-puzzle-progress-v1";
+let progress = loadProgress();
+let sessionProgress = newSessionProgress();
 const suggestionApiUrl = "https://schess-puzzle-suggestions.ft3g0.workers.dev/suggestions";
 const boardEl = document.getElementById("board");
 const counterEl = document.getElementById("counter");
@@ -100,6 +104,9 @@ const controls = {
   editorCancel: document.getElementById("editor-cancel"),
   editorCancelTop: document.getElementById("editor-cancel-top"),
   editorStatus: document.getElementById("editor-status"),
+  progressSummary: document.getElementById("progress-summary"),
+  reviewMistakes: document.getElementById("review-mistakes"),
+  clearSession: document.getElementById("clear-session"),
 };
 
 async function boot() {
@@ -122,7 +129,7 @@ async function boot() {
 
 function bindControls() {
   controls.prev.addEventListener("click", () => gotoPuzzle(state.index - 1));
-  controls.next.addEventListener("click", () => gotoPuzzle(state.index + 1));
+  controls.next.addEventListener("click", gotoNextPuzzle);
   controls.reset.addEventListener("click", resetPuzzle);
   controls.unmoved.addEventListener("click", toggleUnmovedPieces);
   controls.random.addEventListener("click", () => gotoPuzzle(Math.floor(Math.random() * state.filtered.length)));
@@ -137,6 +144,8 @@ function bindControls() {
     button.addEventListener("click", () => setCuratedLevel(button.dataset.curatedLevel));
   });
   controls.boardTheme.addEventListener("change", () => applyBoardTheme(controls.boardTheme.value));
+  controls.reviewMistakes.addEventListener("click", toggleReviewMistakes);
+  controls.clearSession.addEventListener("click", clearSessionProgress);
   if (controls.suggestToggle && controls.editor) {
     controls.suggestToggle.addEventListener("click", openSuggestionEditor);
     controls.editorCancel.addEventListener("click", closeSuggestionEditor);
@@ -400,6 +409,112 @@ function resetDetailChecks(container, checked) {
 function checkedDetailValues(container) {
   return new Set([...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value));
 }
+function newSessionProgress() {
+  return { solved: new Set(), failed: new Set(), skipped: new Set() };
+}
+
+function loadProgress() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(progressStorageKey) || "{}");
+    return {
+      solved: saved.solved && typeof saved.solved === "object" ? saved.solved : {},
+      failed: saved.failed && typeof saved.failed === "object" ? saved.failed : {},
+      skipped: saved.skipped && typeof saved.skipped === "object" ? saved.skipped : {},
+    };
+  } catch {
+    return { solved: {}, failed: {}, skipped: {} };
+  }
+}
+
+function saveProgress() {
+  try {
+    localStorage.setItem(progressStorageKey, JSON.stringify(progress));
+  } catch {
+    // Local progress is optional; a private-mode browser can still solve puzzles.
+  }
+}
+
+function progressId(puzzle = currentPuzzle()) {
+  return String(puzzle?.id || "");
+}
+
+function recordFailure(puzzle = currentPuzzle()) {
+  const id = progressId(puzzle);
+  if (!id) return;
+  const previous = progress.failed[id] || {};
+  progress.failed[id] = { count: Number(previous.count || 0) + 1, lastAt: Date.now() };
+  sessionProgress.failed.add(id);
+  saveProgress();
+  updateProgressPanel();
+}
+
+function recordSkipped(puzzle = currentPuzzle()) {
+  const id = progressId(puzzle);
+  if (!id || progress.solved[id]) return;
+  progress.skipped[id] = { lastAt: Date.now() };
+  sessionProgress.skipped.add(id);
+  saveProgress();
+  updateProgressPanel();
+}
+
+function recordSolved(puzzle = currentPuzzle()) {
+  const id = progressId(puzzle);
+  if (!id) return;
+  progress.solved[id] = { lastAt: Date.now() };
+  sessionProgress.solved.add(id);
+  saveProgress();
+  updateProgressPanel();
+}
+
+function isSolvedPuzzle(puzzle) {
+  return Boolean(progress.solved[progressId(puzzle)]);
+}
+
+function isReviewPuzzle(puzzle) {
+  return Boolean(progress.failed[progressId(puzzle)]);
+}
+
+function updateProgressPanel() {
+  if (!controls.progressSummary) return;
+  const solved = Object.keys(progress.solved).length;
+  const review = Object.keys(progress.failed).length;
+  const sessionParts = [];
+  if (sessionProgress.solved.size) sessionParts.push(`${sessionProgress.solved.size} solved`);
+  if (sessionProgress.failed.size) sessionParts.push(`${sessionProgress.failed.size} mistake${sessionProgress.failed.size === 1 ? "" : "s"}`);
+  if (sessionProgress.skipped.size) sessionParts.push(`${sessionProgress.skipped.size} skipped`);
+  controls.progressSummary.textContent = `${sessionParts.length ? `Session: ${sessionParts.join(" · ")} · ` : ""}Saved: ${solved} solved${review ? ` · ${review} to review` : ""}`;
+  controls.reviewMistakes.classList.toggle("active", state.reviewMistakes);
+  controls.reviewMistakes.textContent = state.reviewMistakes ? "All puzzles" : "Review mistakes";
+}
+
+function clearSessionProgress() {
+  sessionProgress = newSessionProgress();
+  updateProgressPanel();
+  setStatus("Session progress cleared.");
+}
+
+function toggleReviewMistakes() {
+  state.reviewMistakes = !state.reviewMistakes;
+  state.index = 0;
+  state.randomizeInitialPuzzle = false;
+  applyFilters();
+}
+
+function gotoNextPuzzle() {
+  if (!state.filtered.length) return;
+  if (!state.solved) {
+    gotoPuzzle(state.index + 1);
+    return;
+  }
+  for (let offset = 1; offset <= state.filtered.length; offset += 1) {
+    const index = (state.index + offset) % state.filtered.length;
+    if (!isSolvedPuzzle(state.filtered[index])) {
+      gotoPuzzle(index);
+      return;
+    }
+  }
+  setStatus("All matching puzzles solved.", "good");
+}
 function setPuzzleSet(setName) {
   state.puzzleSet = setName === "curated" ? "curated" : "full";
   state.index = 0;
@@ -439,6 +554,7 @@ function applyFilters() {
   const motifFilters = motifChipSets(controls.motifDetail);
   const lengthSet = checkedDetailValues(controls.lengthDetail);
   state.filtered = state.puzzles.filter((puzzle) => {
+    if (state.reviewMistakes && !isReviewPuzzle(puzzle)) return false;
     if (state.puzzleSet === "curated") return (curatedLevels[state.curatedLevel] || []).includes(puzzle.id);
     const motifs = new Set(puzzle.categories.motifs || []);
     if (controls.phase.value === "__detail") {
@@ -473,6 +589,7 @@ function applyFilters() {
   }
   resetPuzzle();
   updatePuzzleUrl();
+  updateProgressPanel();
 }
 function currentPuzzle() {
   return state.filtered[state.index];
@@ -531,6 +648,7 @@ function resetPuzzle() {
   state.matePlayOut = false;
   state.activeBaseSide = puzzle.side || sideFromFen(puzzle.fen) || "w";
   counterEl.textContent = `${state.index + 1} / ${state.filtered.length}${puzzle.id ? `, ID: ${puzzle.id}` : ""}`;
+  updateProgressPanel();
   titleEl.textContent = `${puzzle.side === "b" ? "Black" : "White"} to move`;
   sourceEl.textContent = sourceText(puzzle);
   renderReserve();
@@ -937,6 +1055,7 @@ function tryUserMove(from, to) {
       acceptMateAlternative(alternative);
       return;
     }
+    recordFailure(puzzle);
     setBoardFeedback("bad");
     setStatus(state.matePlayOut ? "That is not the fastest checkmate line." : "That is not the tactic move.", "bad");
     renderBoard();
@@ -968,6 +1087,7 @@ function submitUserMove(move) {
   }
   clearMoveChoices();
   if (!moveMatchesExpected(move, expected)) {
+    recordFailure(puzzle);
     setBoardFeedback("bad");
     setStatus(state.matePlayOut ? "That is not the fastest checkmate line." : "That is not the tactic move.", "bad");
     renderBoard();
@@ -1433,6 +1553,7 @@ function acceptMateAlternative(alternative) {
 }
 function markSolved() {
   state.solved = true;
+  recordSolved();
   setBoardFeedback("good");
   setStatus("Solved.", "good");
   showAnalysisLink();
@@ -1529,6 +1650,7 @@ function isGateSuffix(suffix, from, piece, to) {
 function revealSolution() {
   const puzzle = currentPuzzle();
   if (!puzzle) return;
+  recordSkipped(puzzle);
   solutionEl.classList.remove("hidden");
   showMatePlayOutButton();
   const scores = puzzle.scores || {};

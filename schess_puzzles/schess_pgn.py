@@ -11,7 +11,7 @@ import pyffish
 HEADER_RE = re.compile(r'^\[(\w+)\s+"(.*)"\]$', re.DOTALL)
 MOVE_NUMBER_RE = re.compile(r"^\d+\.(?:\.\.)?$")
 RESULTS = {"1-0", "0-1", "1/2-1/2", "*"}
-CHESSCOM_ARTIFACT_TOKENS = {"D", "P", "R", "T"}
+CHESSCOM_ARTIFACT_TOKENS = {"D", "P", "R", "S", "T"}
 
 
 @dataclass(frozen=True)

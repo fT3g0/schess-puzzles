@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 
+from .clarity import record_clarity
 from .config import load_config
 from .puzzler import VariantPuzzler
 from .selfplay import SelfPlayConfig, generate_selfplay_pgns
@@ -60,6 +61,8 @@ def main() -> None:
 
     discover_chesscom_archive = subparsers.add_parser("discover-chesscom-archive")
     discover_chesscom_archive.add_argument("--config", default="config.toml")
+    discover_chesscom_archive.add_argument("--access-token-file", type=Path, default=Path("access_token.txt"))
+    discover_chesscom_archive.add_argument("--auth-user-id", type=int)
     discover_chesscom_archive.add_argument("--cookie")
     discover_chesscom_archive.add_argument("--player-id", type=int)
     discover_chesscom_archive.add_argument("--username")
@@ -85,8 +88,15 @@ def main() -> None:
     fetch_chesscom_archive.add_argument("--title", default="seirawan")
     fetch_chesscom_archive.add_argument("--start-page", type=int, default=0)
     fetch_chesscom_archive.add_argument("--pages", type=int, default=1)
+    fetch_chesscom_archive.add_argument("--archive-page-cap", type=int, default=50, help="Maximum zero-based archive page within one Chess.com search window (0 disables the cap).")
     fetch_chesscom_archive.add_argument("--archive-timeout", type=int, default=5)
+    fetch_chesscom_archive.add_argument("--archive-search-delay", type=float, default=1.0)
+    fetch_chesscom_archive.add_argument("--archive-page-retries", type=int, default=3)
+    fetch_chesscom_archive.add_argument("--archive-page-retry-delay", type=float, default=3.0)
     fetch_chesscom_archive.add_argument("--delay", type=float, default=1.0)
+    fetch_chesscom_archive.add_argument("--download-retries", type=int, default=2, help="Attempts per retryable authenticated PGN4 download.")
+    fetch_chesscom_archive.add_argument("--download-retry-delay", type=float, default=15.0, help="Cooldown before retrying or continuing after a throttled PGN4 download.")
+    fetch_chesscom_archive.add_argument("--target-dir", type=Path, help="Write verified PGN4 files here instead of the configured raw-game directory.")
     fetch_chesscom_archive.add_argument("--archive-block-manifest", type=Path, default=Path("data/cache/chesscom_archive_blocks.jsonl"))
     fetch_chesscom_archive.add_argument("--no-archive-block-skip", action="store_true")
     fetch_chesscom_archive.add_argument("--debug-socket", action="store_true")
@@ -573,9 +583,7 @@ def _format_cookie(input_path: Path, output_path: Path) -> None:
 def _discover_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None:
     config = load_config(config_path)
     settings = config.raw.get("sources", {}).get("chess_com", {})
-    cookie = args.cookie or __import__("os").getenv("CHESSCOM_COOKIE")
-    if not cookie:
-        raise SystemExit("Set CHESSCOM_COOKIE or pass --cookie for authenticated chess.com archive search.")
+    cookie, auth_user_id = _chesscom_auth(args)
     client = ChessComClient(settings.get("base_url", "https://api.chess.com/pub"))
     try:
         game_ids = client.discover_variant_archive(
@@ -590,6 +598,7 @@ def _discover_chesscom_archive(config_path: Path, args: argparse.Namespace) -> N
             limit_pages=args.pages,
             archive_timeout=args.archive_timeout,
             debug=args.debug_socket,
+            auth_user_id=auth_user_id,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
@@ -601,6 +610,7 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
     import time
 
     config = load_config(config_path)
+    target_dir = args.target_dir or config.paths.raw_games
     settings = config.raw.get("sources", {}).get("chess_com", {})
     cookie, auth_user_id = _chesscom_auth(args)
 
@@ -618,35 +628,127 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
     pages_queried = 0
     pages_skipped = 0
     suggested_next_days: str | None = None
+    last_boundary_ids: list[str] = []
 
     while effective_pages_done < effective_page_budget:
-        try:
-            page_ids = client.discover_variant_archive(
-                cookie=cookie,
-                player_id=args.player_id,
-                username=args.username,
-                days=args.days,
-                game_type=args.game_type,
-                rating_type=args.rating_type,
-                title=args.title,
-                start_page=page,
-                limit_pages=1,
-                archive_timeout=args.archive_timeout,
-                debug=args.debug_socket,
-                auth_user_id=auth_user_id,
+        if args.archive_page_cap > 0 and page >= args.archive_page_cap:
+            if not last_boundary_ids:
+                # A resumed process has no in-memory page history. Revisit the
+                # final allowed page once so missing files are retried and its
+                # game dates provide a trustworthy older-window boundary.
+                page = max(0, args.archive_page_cap - 1)
+                print(
+                    f"Archive resume reached page cap; verifying boundary page {page} "
+                    "before changing the date window"
+                )
+                continue
+            suggested_next_days = _later_archive_days(
+                suggested_next_days,
+                _suggest_next_archive_days(last_boundary_ids, target_dir),
             )
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
+            print(
+                f"Archive page cap {args.archive_page_cap} reached at page {page}; "
+                f"suggested_next_days={suggested_next_days}"
+            )
+            print("archive_window_exhausted=True")
+            break
+        if pages_queried > 0 and args.archive_search_delay > 0:
+            time.sleep(args.archive_search_delay)
+
+        page_ids: list[str] | None = None
+        last_error: ValueError | None = None
+        retry_count = max(1, args.archive_page_retries)
+        for attempt in range(1, retry_count + 1):
+            print(f"Archive page {page}: searching (attempt {attempt}/{retry_count})...")
+            try:
+                page_ids = client.discover_variant_archive(
+                    cookie=cookie,
+                    player_id=args.player_id,
+                    username=args.username,
+                    days=args.days,
+                    game_type=args.game_type,
+                    rating_type=args.rating_type,
+                    title=args.title,
+                    start_page=page,
+                    limit_pages=1,
+                    archive_timeout=args.archive_timeout,
+                    debug=args.debug_socket,
+                    auth_user_id=auth_user_id,
+                )
+                break
+            except ValueError as exc:
+                last_error = exc
+                if attempt >= retry_count:
+                    break
+                print(
+                    f"Archive page {page}: {exc}; retrying this page in "
+                    f"{args.archive_page_retry_delay:g}s"
+                )
+                time.sleep(max(0.0, args.archive_page_retry_delay))
+
+        if page_ids is None:
+            # Archive results are chronological. Once all preceding pages have
+            # been processed or skipped, a persistently unavailable later page
+            # can safely become the boundary for the next, older date window.
+            suggested_next_days = _later_archive_days(
+                suggested_next_days,
+                _suggest_next_archive_days(last_boundary_ids, target_dir),
+            )
+            if suggested_next_days:
+                print(
+                    f"Archive page {page} remained unavailable after {retry_count} attempt(s); "
+                    f"continuing with older window {suggested_next_days}"
+                )
+                print("archive_window_exhausted=True")
+                break
+            raise SystemExit(str(last_error))
 
         pages_queried += 1
+
         if not page_ids:
             print(f"Archive page {page}: no games")
+            # Chess.com caps a single archive window. Find the nearest earlier
+            # non-empty page so the runner can move its lower day boundary past
+            # the oldest reachable game instead of retrying this page forever.
+            for boundary_page in range(page - 1, max(-1, page - 6), -1):
+                if boundary_page < 0:
+                    break
+                try:
+                    boundary_ids = client.discover_variant_archive(
+                        cookie=cookie,
+                        player_id=args.player_id,
+                        username=args.username,
+                        days=args.days,
+                        game_type=args.game_type,
+                        rating_type=args.rating_type,
+                        title=args.title,
+                        start_page=boundary_page,
+                        limit_pages=1,
+                        archive_timeout=args.archive_timeout,
+                        debug=args.debug_socket,
+                        auth_user_id=auth_user_id,
+                    )
+                except ValueError:
+                    boundary_ids = []
+                if not boundary_ids:
+                    continue
+                suggested_next_days = _later_archive_days(
+                    suggested_next_days,
+                    _suggest_next_archive_days(boundary_ids, target_dir),
+                )
+                if suggested_next_days:
+                    print(
+                        f"Archive window exhausted at page {page}; "
+                        f"boundary_page={boundary_page} suggested_next_days={suggested_next_days}"
+                    )
+                break
+            print("archive_window_exhausted=True")
             break
-
+        last_boundary_ids = page_ids
         existing = []
         missing = []
         for game_id in page_ids:
-            target = config.paths.raw_games / f"chesscom_{game_id}.pgn4.txt"
+            target = target_dir / f"chesscom_{game_id}.pgn4.txt"
             if target.exists():
                 existing.append(game_id)
             else:
@@ -658,9 +760,10 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
             skip_pages, skipped_block_ids = _known_archive_skip_match(page_ids, known_blocks, page_size)
         if not missing:
             boundary_ids = skipped_block_ids or page_ids
-            suggested_next_days = suggested_next_days or _suggest_next_archive_days(
-                boundary_ids,
-                config.paths.raw_games,
+            last_boundary_ids = boundary_ids
+            suggested_next_days = _later_archive_days(
+                suggested_next_days,
+                _suggest_next_archive_days(boundary_ids, target_dir),
             )
             if skip_pages > 1:
                 print(
@@ -669,30 +772,55 @@ def _fetch_chesscom_archive(config_path: Path, args: argparse.Namespace) -> None
                 )
                 pages_skipped += skip_pages - 1
                 skipped_existing += len(existing) * skip_pages
+                discovered_ids.extend(boundary_ids)
                 page += skip_pages
             else:
                 print(
                     f"Archive page {page}: discovered={len(page_ids)} existing={len(existing)} to_download=0; "
-                    "existing date boundary reached"
+                    "known page, continuing to look for unseen games"
                 )
                 discovered_ids.extend(page_ids)
                 skipped_existing += len(existing)
                 page += 1
-            # A fully-known page marks the boundary of the useful date window.
-            # Return control to the unattended runner so it can restart at page 0
-            # with the older date range instead of probing the rest of this range.
-            break
+            # Existing pages can overlap previous runs. They do not consume the
+            # requested effective-page budget; keep scanning until a new page or
+            # Chess.com's archive window is actually exhausted.
+            continue
         print(f"Archive page {page}: discovered={len(page_ids)} existing={len(existing)} to_download={len(missing)}")
         effective_pages_done += 1
         skipped_existing += len(existing)
         discovered_ids.extend(page_ids)
         for index, game_id in enumerate(missing, start=1):
-            try:
-                result = client.download_variant_pgn4(game_id, config.paths.raw_games, cookie=cookie, auth_user_id=auth_user_id)
-            except Exception as exc:
+            result = None
+            last_error: Exception | None = None
+            retry_count = max(1, args.download_retries)
+            for attempt in range(1, retry_count + 1):
+                try:
+                    result = client.download_variant_pgn4(
+                        game_id,
+                        target_dir,
+                        cookie=cookie,
+                        auth_user_id=auth_user_id,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    retryable = "PGN4 socket returned no game data" in str(exc)
+                    if not retryable or attempt >= retry_count:
+                        break
+                    print(
+                        f"  [{index}/{len(missing)}] retrying {game_id} after "
+                        f"{args.download_retry_delay:g}s: {exc}"
+                    )
+                    time.sleep(max(args.delay, args.download_retry_delay))
+
+            if result is None:
                 failed += 1
-                print(f"  [{index}/{len(missing)}] failed {game_id}: {exc}")
+                print(f"  [{index}/{len(missing)}] failed {game_id}: {last_error}")
+                if index < len(missing):
+                    time.sleep(max(args.delay, args.download_retry_delay))
                 continue
+
             downloaded += 1
             print(f"  [{index}/{len(missing)}] wrote {result.path}")
             if args.delay > 0 and index < len(missing):
@@ -776,6 +904,18 @@ def _known_archive_skip_match(page_ids: list[str], known_blocks: list[list[str]]
             skip_games = skip_pages * max(1, page_size)
             return skip_pages, block[offset:offset + skip_games]
     return 1, []
+
+
+def _later_archive_days(current: str | None, candidate: str | None) -> str | None:
+    """Keep the older lower bound when a scan crosses several known pages."""
+    if candidate is None:
+        return current
+    if current is None:
+        return candidate
+    try:
+        return candidate if int(candidate.partition("-")[0]) > int(current.partition("-")[0]) else current
+    except ValueError:
+        return candidate
 
 
 def _suggest_next_archive_days(game_ids: list[str], raw_games_dir: Path) -> str | None:
@@ -2440,6 +2580,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
             if not line.strip():
                 continue
             record = json.loads(line)
+            record["clarity"] = record.get("clarity") or record_clarity(record, _normalize_line(record.get("line", [])))
             flags = record.get("flags", [])
             if hidden_flags & set(flags):
                 continue
@@ -2472,6 +2613,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
                         "second_san": record.get("second_san"),
                     },
                     "quality": record.get("quality", {}),
+                    "clarity": record.get("clarity", {}),
                     "material": record.get("material", {}),
                     "dedupe": record.get("dedupe", {}),
                     "tags": flags,
@@ -2504,6 +2646,7 @@ def _enrich_report_record(record: dict) -> dict:
     )
     record["material"] = _record_material_metadata(record, line)
     record["quality"] = _record_quality_metadata(record, line)
+    record["clarity"] = record_clarity(record, line)
     record["dedupe"] = _record_dedupe_metadata(record, line)
     return record
 

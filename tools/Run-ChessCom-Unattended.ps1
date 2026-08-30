@@ -7,7 +7,14 @@ param(
     [string]$ArchiveDays = "0-9999",
     [switch]$AutoArchiveDays,
     [int]$ArchiveChunkPages = 5,
+    [int]$ArchivePageCap = 50,
     [double]$DownloadDelay = 1.0,
+    [int]$DownloadRetries = 2,
+    [double]$DownloadRetryDelaySeconds = 15.0,
+    [int]$ArchiveTimeout = 5,
+    [double]$ArchiveSearchDelay = 1.0,
+    [int]$ArchivePageRetries = 3,
+    [double]$ArchivePageRetryDelaySeconds = 3.0,
     [int]$BatchSize = 10,
     [int]$MaxBatches = 9999,
     [int]$Workers = 1,
@@ -25,6 +32,10 @@ param(
     [string]$ProcessedManifest = "data\puzzles\chesscom_processed_raw.txt",
     [string]$FailedManifest = "data\puzzles\chesscom_failed_raw.txt",
     [string]$ArchiveBlockManifest = "data\cache\chesscom_archive_blocks.jsonl",
+    [string]$FetchStatePath = "data\\cache\\chesscom_fetch_state.json",
+    [switch]$ResumeFetch,
+    [switch]$ResetFetchState,
+    [switch]$FetchOnly,
     [switch]$CombineAfterEachChunk,
     [switch]$NoFinalCombine
 )
@@ -35,7 +46,7 @@ function Invoke-Step {
     param([string[]]$CommandArgs)
     Write-Host ""
     Write-Host "> python $($CommandArgs -join ' ')"
-    & python @CommandArgs
+    & python -u @CommandArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code $LASTEXITCODE"
     }
@@ -54,13 +65,17 @@ function Invoke-StepWithRetry {
             if ($CaptureOutput) {
                 Write-Host ""
                 Write-Host "> python $($CommandArgs -join ' ')"
-                $output = & python @CommandArgs 2>&1
+                $output = [System.Collections.Generic.List[string]]::new()
+                & python -u @CommandArgs 2>&1 | ForEach-Object {
+                    $line = "$_"
+                    $output.Add($line)
+                    Write-Host $line
+                }
                 $exitCode = $LASTEXITCODE
-                $output | ForEach-Object { Write-Host $_ }
                 if ($exitCode -ne 0) {
                     throw "Command failed with exit code $exitCode"
                 }
-                return @($output | ForEach-Object { "$_" })
+                return $output.ToArray()
             }
             Invoke-Step $CommandArgs
             return @()
@@ -110,6 +125,40 @@ function Get-FetchSuggestedDays {
     return $null
 }
 
+function Get-FetchArchiveWindowExhausted {
+    param([object[]]$OutputLines)
+    return @($OutputLines | Where-Object { "$_" -match 'archive_window_exhausted=True' }).Count -gt 0
+}
+function Read-FetchState {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    } catch {
+        throw "Could not read fetch state ${Path}: $($_.Exception.Message)"
+    }
+}
+
+function Save-FetchState {
+    param(
+        [string]$Path,
+        [string]$ArchiveDays,
+        [int]$NextPage,
+        [int]$EffectivePagesDone
+    )
+    $directory = Split-Path -Parent $Path
+    if ($directory) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
+    $state = [ordered]@{
+        version = 1
+        archive_days = $ArchiveDays
+        next_page = $NextPage
+        effective_pages_done = $EffectivePagesDone
+        updated_at = (Get-Date).ToUniversalTime().ToString("o")
+    }
+    $temporary = "$Path.tmp"
+    $state | ConvertTo-Json | Set-Content -LiteralPath $temporary -Encoding UTF8
+    Move-Item -LiteralPath $temporary -Destination $Path -Force
+}
 function New-FetchCommandArgs {
     param([int]$Page, [int]$Chunk)
     return @(
@@ -120,7 +169,14 @@ function New-FetchCommandArgs {
         "--title", "seirawan",
         "--start-page", "$Page",
         "--pages", "$Chunk",
+        "--archive-page-cap", "$ArchivePageCap",
+        "--archive-timeout", "$ArchiveTimeout",
+        "--archive-search-delay", "$ArchiveSearchDelay",
+        "--archive-page-retries", "$ArchivePageRetries",
+        "--archive-page-retry-delay", "$ArchivePageRetryDelaySeconds",
         "--delay", "$DownloadDelay",
+        "--download-retries", "$DownloadRetries",
+        "--download-retry-delay", "$DownloadRetryDelaySeconds",
         "--archive-block-manifest", $ArchiveBlockManifest
     )
 }
@@ -136,7 +192,7 @@ function Start-FetchChunkJob {
         while ($true) {
             Write-Host ""
             Write-Host "> python $($CommandArgs -join ' ')"
-            & python @CommandArgs
+            & python -u @CommandArgs
             if ($LASTEXITCODE -eq 0) { return }
             if ($attempt -ge $Retries) { throw "Fetch command failed with exit code $LASTEXITCODE" }
             Write-Warning "Fetch command failed on attempt $attempt/$($Retries) with exit code $LASTEXITCODE"
@@ -349,9 +405,27 @@ try {
     $pagesDone = 0
     $currentArchiveDays = $ArchiveDays
     $nextArchivePage = $ArchiveStartPage
+    if ($ResetFetchState -and (Test-Path -LiteralPath $FetchStatePath)) {
+        Remove-Item -LiteralPath $FetchStatePath -Force
+        Write-Host "Removed fetch checkpoint: $FetchStatePath"
+    }
+    if ($ResumeFetch) {
+        $fetchState = Read-FetchState -Path $FetchStatePath
+        if ($null -ne $fetchState) {
+            $currentArchiveDays = [string]$fetchState.archive_days
+            $nextArchivePage = [int]$fetchState.next_page
+            $pagesDone = [int]$fetchState.effective_pages_done
+            Write-Host "Resuming fetch checkpoint: days=$currentArchiveDays next_page=$nextArchivePage effective_pages=$pagesDone"
+        } else {
+            Write-Host "No fetch checkpoint found; starting at days=$currentArchiveDays page=$nextArchivePage"
+        }
+    }
     $batchesDone = 0
+    if ($FetchOnly -and $OverlapFetchAndAnalyze) {
+        throw "-FetchOnly cannot be combined with -OverlapFetchAndAnalyze."
+    }
     $emptyFetchChunks = 0
-    while (($ProcessExistingOnly -or $pagesDone -lt $ArchivePages -or (Get-UnprocessedChessComFiles).Count -gt 0) -and $batchesDone -lt $MaxBatches) {
+    while (($ProcessExistingOnly -or $pagesDone -lt $ArchivePages -or ((-not $FetchOnly) -and (Get-UnprocessedChessComFiles).Count -gt 0)) -and $batchesDone -lt $MaxBatches) {
         $stopAfterThisChunk = $false
         $fetchJob = $null
         $prefetchUnprocessed = $null
@@ -368,6 +442,8 @@ try {
                 $nextPage = Get-FetchNextPage -OutputLines $fetchOutput -FallbackPage ($page + $chunk)
                 $effectivePages = Get-FetchEffectivePages -OutputLines $fetchOutput -FallbackPages $chunk
                 $suggestedDays = Get-FetchSuggestedDays -OutputLines $fetchOutput
+
+                $windowExhausted = Get-FetchArchiveWindowExhausted -OutputLines $fetchOutput
                 $pagesDone += $effectivePages
                 if ($AutoArchiveDays -and $suggestedDays -and $suggestedDays -ne $currentArchiveDays) {
                     Write-Host "Switching archive days from $currentArchiveDays to $suggestedDays based on skipped block dates."
@@ -376,6 +452,13 @@ try {
                     $emptyFetchChunks = 0
                 } else {
                     $nextArchivePage = $nextPage
+                }
+                if ($ResumeFetch) {
+                    Save-FetchState -Path $FetchStatePath -ArchiveDays $currentArchiveDays -NextPage $nextArchivePage -EffectivePagesDone $pagesDone
+                }
+                if ($windowExhausted -and -not $suggestedDays) {
+                    Write-Warning "Archive window is exhausted but no older date boundary could be derived; stopping fetch."
+                    $stopAfterThisChunk = $true
                 }
                 $newRawFiles = (Get-RawChessComCount) - $rawBeforeFetch
                 if ($newRawFiles -le 0) {
@@ -392,6 +475,10 @@ try {
             }
         }
 
+        if ($FetchOnly) {
+            if ($stopAfterThisChunk) { break }
+            continue
+        }
         while ($batchesDone -lt $MaxBatches) {
             if ($null -ne $prefetchUnprocessed) {
                 $processedNow = Get-ProcessedSet
@@ -492,6 +579,8 @@ try {
             $nextPage = Get-FetchNextPage -OutputLines $fetchOutput -FallbackPage ($fetchJob.Page + $fetchJob.Chunk)
             $effectivePages = Get-FetchEffectivePages -OutputLines $fetchOutput -FallbackPages $fetchJob.Chunk
             $suggestedDays = Get-FetchSuggestedDays -OutputLines $fetchOutput
+
+            $windowExhausted = Get-FetchArchiveWindowExhausted -OutputLines $fetchOutput
             $pagesDone += $effectivePages
             if ($AutoArchiveDays -and $suggestedDays -and $suggestedDays -ne $currentArchiveDays) {
                 Write-Host "Switching archive days from $currentArchiveDays to $suggestedDays based on skipped block dates."
@@ -500,6 +589,13 @@ try {
                 $emptyFetchChunks = 0
             } else {
                 $nextArchivePage = $nextPage
+            }
+            if ($ResumeFetch) {
+                Save-FetchState -Path $FetchStatePath -ArchiveDays $currentArchiveDays -NextPage $nextArchivePage -EffectivePagesDone $pagesDone
+            }
+            if ($windowExhausted -and -not $suggestedDays) {
+                Write-Warning "Archive window is exhausted but no older date boundary could be derived; stopping fetch."
+                $stopAfterThisChunk = $true
             }
             $newRawFiles = (Get-RawChessComCount) - $fetchJob.RawBeforeFetch
             if ($newRawFiles -le 0) {
@@ -518,7 +614,7 @@ try {
         if ($ProcessExistingOnly -or $stopAfterThisChunk) { break }
     }
 
-    if (-not $NoFinalCombine) {
+    if (-not $NoFinalCombine -and -not $FetchOnly) {
         Invoke-Step @(
             "-m", "schess_puzzles.cli", "combine-reports",
             "--output", "data\puzzles\chesscom_all_report.jsonl"

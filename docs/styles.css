@@ -122,7 +122,11 @@ h1 { margin: 0 0 12px; font-size: 26px; line-height: 1.15; }
 .counter, .source, .solution, .status { color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
 .counter { margin: 0 0 4px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .controls { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 12px 0; }
-.filters { display: grid; gap: 10px; margin: 14px 0; color: var(--muted); }
+.progress-panel { display: grid; gap: 7px; margin: 12px 0 4px; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.progress-summary { margin: 0; color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1.4; }
+.progress-controls { display: flex; flex-wrap: wrap; gap: 7px; }
+.progress-controls button { padding: 6px 8px; font-size: 12px; color: var(--accent-2); }
+.progress-controls button.active { border-color: var(--accent); background: var(--accent); color: #fff; box-shadow: none; }.filters { display: grid; gap: 10px; margin: 14px 0; color: var(--muted); }
 .standard-filters { display: grid; gap: 10px; }
 .filters label { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .filters input { width: 16px; height: 16px; flex: 0 0 auto; }
