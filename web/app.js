@@ -48,6 +48,7 @@ const progressStorageKey = "schess-puzzle-progress-v1";
 let progress = loadProgress();
 let sessionProgress = newSessionProgress();
 const suggestionApiUrl = "https://schess-puzzle-suggestions.ft3g0.workers.dev/suggestions";
+const contactApiUrl = "https://schess-puzzle-suggestions.ft3g0.workers.dev/contact";
 const boardEl = document.getElementById("board");
 const counterEl = document.getElementById("counter");
 const titleEl = document.getElementById("title");
@@ -107,6 +108,21 @@ const controls = {
   progressSummary: document.getElementById("progress-summary"),
   reviewMistakes: document.getElementById("review-mistakes"),
   clearSession: document.getElementById("clear-session"),
+  contactToggle: document.getElementById("contact-toggle"),
+  contactDialog: document.getElementById("contact-dialog"),
+  contactForm: document.getElementById("contact-form"),
+  contactClose: document.getElementById("contact-close"),
+  contactCancel: document.getElementById("contact-cancel"),
+  contactName: document.getElementById("contact-name"),
+  contactEmail: document.getElementById("contact-email"),
+  contactMessage: document.getElementById("contact-message"),
+  contactWebsite: document.getElementById("contact-website"),
+  contactStatus: document.getElementById("contact-status"),
+  contactSubmit: document.getElementById("contact-submit"),
+  imprintToggle: document.getElementById("imprint-toggle"),
+  imprintDialog: document.getElementById("imprint-dialog"),
+  imprintClose: document.getElementById("imprint-close"),
+  imprintDone: document.getElementById("imprint-done"),
 };
 
 async function boot() {
@@ -145,7 +161,13 @@ function bindControls() {
   });
   controls.boardTheme.addEventListener("change", () => applyBoardTheme(controls.boardTheme.value));
   controls.reviewMistakes.addEventListener("click", toggleReviewMistakes);
-  controls.clearSession.addEventListener("click", clearSessionProgress);
+  controls.clearSession.addEventListener("click", clearSessionProgress);  controls.contactToggle.addEventListener("click", openContactDialog);
+  controls.contactClose.addEventListener("click", closeContactDialog);
+  controls.contactCancel.addEventListener("click", closeContactDialog);
+  controls.contactForm.addEventListener("submit", submitContactForm);
+  controls.imprintToggle.addEventListener("click", openImprintDialog);
+  controls.imprintClose.addEventListener("click", closeImprintDialog);
+  controls.imprintDone.addEventListener("click", closeImprintDialog);
   if (controls.suggestToggle && controls.editor) {
     controls.suggestToggle.addEventListener("click", openSuggestionEditor);
     controls.editorCancel.addEventListener("click", closeSuggestionEditor);
@@ -1411,7 +1433,76 @@ function clearMoveChoices() {
   renderReserve();
 }
 
+function openContactDialog() {
+  controls.contactForm.reset();
+  setContactStatus("", "");
+  controls.contactDialog.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  controls.contactName.focus();
+}
+
+function closeContactDialog() {
+  controls.contactDialog.classList.add("hidden");
+  document.body.style.overflow = state.editor ? "hidden" : "";
+}
+
+function openImprintDialog() {
+  controls.imprintDialog.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeImprintDialog() {
+  controls.imprintDialog.classList.add("hidden");
+  document.body.style.overflow = state.editor ? "hidden" : "";
+}
+
+async function submitContactForm(event) {
+  event.preventDefault();
+  const contact = {
+    name: controls.contactName.value.trim(),
+    email: controls.contactEmail.value.trim(),
+    message: controls.contactMessage.value.trim(),
+    website: controls.contactWebsite.value.trim(),
+    page: window.location.href,
+  };
+  if (!contact.name || !contact.email || contact.message.length < 4) {
+    setContactStatus("Please enter your name, email, and a message.", "bad");
+    return;
+  }
+  controls.contactSubmit.disabled = true;
+  setContactStatus("Sending message...", "");
+  try {
+    const response = await fetch(contactApiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(contact),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    controls.contactForm.reset();
+    setContactStatus("Thank you. Your message was sent.", "good");
+  } catch (error) {
+    setContactStatus(`Could not send message: ${error.message}`, "bad");
+  } finally {
+    controls.contactSubmit.disabled = false;
+  }
+}
+
+function setContactStatus(text, cls = "") {
+  controls.contactStatus.textContent = text;
+  controls.contactStatus.className = `suggest-status ${cls}`.trim();
+}
 function onKeyDown(event) {
+  if (event.key === "Escape" && !controls.contactDialog.classList.contains("hidden")) {
+    event.preventDefault();
+    closeContactDialog();
+    return;
+  }
+  if (event.key === "Escape" && !controls.imprintDialog.classList.contains("hidden")) {
+    event.preventDefault();
+    closeImprintDialog();
+    return;
+  }
   if (state.editor && event.key === "Escape") {
     event.preventDefault();
     closeSuggestionEditor();

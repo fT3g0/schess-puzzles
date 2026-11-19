@@ -69,6 +69,19 @@ For example:
 Ne11-f9&@yH-e11 -> b8c6h
 O-O&@rE-h4      -> e1g1e
 ```
+### PGN4 to PyChess PGN
+
+For an individual chess.com game, double-click
+[`tools/Open-PGN4-To-PyChess.bat`](tools/Open-PGN4-To-PyChess.bat). Paste the
+PGN4 export, select **Convert**, then either copy the generated PGN or save it
+as a `.pgn` file for PyChess **Import Game**. Everything stays local and PGN4
+side variations are retained.
+
+The same conversion also works without the graphical window:
+
+```powershell
+python tools\pgn4_to_pychess_gui.py --input .\my-game.pgn4.txt --output .\my-game.pgn
+```
 
 Current scraper status:
 

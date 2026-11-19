@@ -230,3 +230,37 @@ body.help-mode [data-help] { outline: 1px dashed var(--accent-2); outline-offset
 .detail-options .detail-hint { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
 
 .board { touch-action: none; }
+
+.site-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 0 24px 26px; }
+.site-footer a, .site-footer button { color: var(--muted); font-size: 13px; }
+.site-footer a { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; text-decoration: none; font-weight: 700; }
+.site-footer a:hover { border-color: var(--accent); color: var(--ink); }
+.site-dialog { position: fixed; inset: 0; z-index: 700; display: grid; place-items: center; overflow: auto; padding: 20px; background: rgba(15, 18, 20, .72); }
+.site-dialog-shell { width: min(560px, 100%); border: 1px solid var(--line); border-radius: 8px; padding: 18px; background: var(--panel); box-shadow: 0 24px 72px rgba(0,0,0,.4); }
+.site-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+.site-dialog-head h2 { margin: 0; font-size: 22px; }
+.contact-form { display: grid; gap: 14px; }
+.contact-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 700; }
+.contact-form input, .contact-form textarea { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--button); color: var(--ink); padding: 8px 10px; font: inherit; }
+.contact-form textarea { resize: vertical; }
+.contact-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.honeypot { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-actions .primary { width: auto; margin: 0; }
+.imprint-shell p { color: var(--muted); line-height: 1.5; }
+.imprint-shell strong { color: var(--ink); }
+@media (max-width: 760px) {
+  .site-footer { padding: 0 12px 18px; }
+  .site-dialog { padding: 12px; align-items: end; }
+  .site-dialog-shell { padding: 16px; }
+  .dialog-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .dialog-actions button { width: 100%; }
+}
+
+/* Must win over .site-dialog's display:grid declaration. */
+.site-dialog.hidden { display: none; }
+.site-footer { justify-content: flex-end; padding-right: 24px; }
+.site-footer a, .site-footer button { padding: 6px 8px; font-size: 12px; }
+@media (max-width: 760px) {
+  .site-footer { justify-content: center; padding-right: 12px; }
+}

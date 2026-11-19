@@ -78,3 +78,36 @@ $env:Path = "D:\Program Files\nodejs;$env:Path"
 ```
 
 Use `rejected` for suggestions that fail engine verification or are not suitable as puzzles.
+## Contact Form
+
+- `POST /contact` accepts `name`, `email`, `message`, `page`, and a hidden
+  `website` honeypot field.
+- Messages are stored in the `contact_messages` D1 table and rate-limited to
+  three requests per IP hash in ten minutes.
+- When Email Sending is configured, the Worker also forwards each message to
+  the private `CONTACT_RECIPIENT` secret and uses the sender's address as
+  `Reply-To`.
+
+### Enable Email Forwarding
+
+Cloudflare Email Sending must first be enabled for `schesspuzzles.com` in the
+same Cloudflare account as this Worker. Then run these interactively from this
+directory (the values are never committed):
+
+```powershell
+& "D:\Program Files\nodejs\npx.cmd" wrangler login
+& "D:\Program Files\nodejs\npx.cmd" wrangler email sending enable schesspuzzles.com
+& "D:\Program Files\nodejs\npx.cmd" wrangler secret put CONTACT_RECIPIENT
+# enter: hendrik.falkenberg@gmail.com
+& "D:\Program Files\nodejs\npx.cmd" wrangler secret put RATE_LIMIT_SALT
+& "D:\Program Files\nodejs\npx.cmd" wrangler d1 execute schess-puzzle-suggestions --remote --file=./schema/schema.sql
+& "D:\Program Files\nodejs\npx.cmd" wrangler deploy
+```
+
+The configured sender is `contact@schesspuzzles.com`. If that domain cannot be
+onboarded for Email Sending yet, the form still stores messages in D1; retrieve
+them with:
+
+```powershell
+& "D:\Program Files\nodejs\npx.cmd" wrangler d1 execute schess-puzzle-suggestions --remote --command "SELECT id, created_at, name, email, message, page_url FROM contact_messages ORDER BY created_at DESC LIMIT 50"
+```

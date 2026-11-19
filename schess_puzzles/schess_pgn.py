@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
@@ -12,6 +13,7 @@ HEADER_RE = re.compile(r'^\[(\w+)\s+"(.*)"\]$', re.DOTALL)
 MOVE_NUMBER_RE = re.compile(r"^\d+\.(?:\.\.)?$")
 RESULTS = {"1-0", "0-1", "1/2-1/2", "*"}
 CHESSCOM_ARTIFACT_TOKENS = {"D", "P", "R", "S", "T"}
+PGN4_MOVE_PREFIX_RE = re.compile(r"^(?P<number>\d+)\.(?P<black>\.)?")
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,13 @@ class ParsedUciGame:
     variant: str
     start_fen: str
     moves: list[str]
+
+@dataclass
+class Pgn4Move:
+    """A PGN4 move plus its alternative continuations."""
+
+    token: str
+    variations: list[list["Pgn4Move"]]
 
 
 def write_epd_from_pgn(path: Path, stream: TextIO, configured_variant: str = "seirawan") -> None:
@@ -69,6 +78,19 @@ def parse_pgn(path: Path) -> list[ParsedGame]:
 
 def read_headers(path: Path) -> list[dict[str, str]]:
     return [game.headers for game in parse_pgn(path)]
+
+def pgn4_to_pychess_pgn(text: str) -> str:
+    """Convert Chess.com's two-player Seirawan PGN4 to importable PyChess PGN.
+
+    Unlike the analysis parser above, this preserves recursive PGN4 variations.
+    Chess.com writes them after the move whose continuation they replace, which
+    maps directly to PGN recursive annotation variations.
+    """
+
+    games = _parse_pgn4_text(text)
+    if not games:
+        raise ValueError("No PGN4 game found.")
+    return "\n\n".join(_render_pychess_game(headers, moves) for headers, moves in games) + "\n"
 
 
 def san_to_uci(variant: str, start_fen: str, move_stack: list[str], san: str) -> str:
@@ -221,3 +243,150 @@ def _normalize_san(san: str) -> str:
 def _write_epd(stream: TextIO, start_fen: str, variant: str, site: str, move_stack: list[str]) -> None:
     fen = pyffish.get_fen(variant, start_fen, move_stack)
     stream.write(f"{fen};variant {variant};site {site}\n")
+
+
+def _parse_pgn4_text(text: str) -> list[tuple[dict[str, str], list[Pgn4Move]]]:
+    """Parse PGN4 headers and a recursive move tree without losing variations."""
+
+    chunks = [chunk.strip() for chunk in re.split(r"\n\s*\n(?=\[(?:GameNr|Event)\s+\")", text) if chunk.strip()]
+    games: list[tuple[dict[str, str], list[Pgn4Move]]] = []
+    for chunk in chunks:
+        headers: dict[str, str] = {}
+        movetext_lines: list[str] = []
+        for line in _join_multiline_headers(chunk.splitlines()):
+            stripped = line.strip()
+            match = HEADER_RE.match(stripped)
+            if match:
+                headers[match.group(1)] = match.group(2)
+            elif stripped:
+                movetext_lines.append(stripped)
+        if headers or movetext_lines:
+            games.append((headers, _parse_pgn4_move_tree(" ".join(movetext_lines))))
+    return games
+
+
+def _parse_pgn4_move_tree(text: str) -> list[Pgn4Move]:
+    text = re.sub(r"\{[^}]*\}", " ", text)
+    text = re.sub(r";[^\n]*", " ", text)
+    tokens = re.findall(r"\(|\)|[^\s()]+", text)
+    index = 0
+
+    def parse_sequence() -> list[Pgn4Move]:
+        nonlocal index
+        moves: list[Pgn4Move] = []
+        while index < len(tokens):
+            token = tokens[index]
+            index += 1
+            if token == ")":
+                break
+            if token == "(":
+                variation = parse_sequence()
+                if moves and variation:
+                    moves[-1].variations.append(variation)
+                continue
+            move = _clean_pgn4_movetext_token(token)
+            if move:
+                moves.append(Pgn4Move(move, []))
+        return moves
+
+    return parse_sequence()
+
+
+def _clean_pgn4_movetext_token(token: str) -> str:
+    if token in RESULTS or token == ".." or MOVE_NUMBER_RE.match(token):
+        return ""
+    token = re.sub(r"^\d+\.(?:\.)?", "", token)
+    if not token or token in RESULTS or token in CHESSCOM_ARTIFACT_TOKENS:
+        return ""
+    return token
+
+
+def _render_pychess_game(headers: dict[str, str], moves: list[Pgn4Move]) -> str:
+    variant = _normalize_variant(headers.get("RuleVariants", headers.get("Variant", "seirawan")))
+    if variant != "seirawan":
+        raise ValueError(f"Only two-player Seirawan PGN4 is supported, got variant {variant!r}.")
+    if "StartFen4" not in headers:
+        raise ValueError("This does not look like a Chess.com PGN4 export (StartFen4 is missing).")
+
+    start_fen = pyffish.start_fen(variant)
+    result = headers.get("Result", "*")
+    if result not in RESULTS:
+        result = "*"
+
+    output_headers = [
+        ("Event", "Chess.com Seirawan Chess"),
+        ("Site", _clean_site(headers.get("Site", ""))),
+        ("Date", _pgn_date(headers.get("Date", ""))),
+        ("Round", headers.get("GameNr", "?")),
+        ("White", headers.get("White", "?")),
+        ("Black", headers.get("Black", "?")),
+        ("Result", result),
+        ("Variant", "seirawan"),
+        ("SetUp", "1"),
+        ("FEN", start_fen),
+    ]
+    for name in ("WhiteElo", "BlackElo", "TimeControl", "Termination"):
+        if headers.get(name):
+            output_headers.append((name, headers[name]))
+
+    rendered = _render_pgn4_sequence(variant, start_fen, [], moves)
+    header_text = "\n".join(f'[{name} "{_escape_pgn_header(value)}"]' for name, value in output_headers)
+    return f"{header_text}\n\n{rendered} {result}".rstrip()
+
+
+def _render_pgn4_sequence(
+    variant: str,
+    start_fen: str,
+    history: list[str],
+    moves: list[Pgn4Move],
+) -> str:
+    rendered: list[str] = []
+    current_history = list(history)
+    for node in moves:
+        before = list(current_history)
+        uci = _pgn4_move_to_uci(node.token, _side_to_move(variant, start_fen, current_history))
+        legal = pyffish.legal_moves(variant, start_fen, current_history)
+        if uci not in legal:
+            raise ValueError(f"PGN4 move {node.token!r} became {uci!r}, which is not legal after {current_history!r}.")
+        san = pyffish.get_san_moves(variant, start_fen, [*current_history, uci])[-1]
+        rendered.append(_pgn_move_prefix(variant, start_fen, current_history) + san)
+        current_history.append(uci)
+
+        for variation in node.variations:
+            try:
+                variation_text = _render_pgn4_sequence(variant, start_fen, current_history, variation)
+            except ValueError as after_error:
+                try:
+                    variation_text = _render_pgn4_sequence(variant, start_fen, before, variation)
+                except ValueError:
+                    raise after_error
+            rendered.append(f"({variation_text})")
+    return " ".join(rendered)
+
+
+def _side_to_move(variant: str, start_fen: str, history: list[str]) -> str:
+    return pyffish.get_fen(variant, start_fen, history).split()[1]
+
+
+def _pgn_move_prefix(variant: str, start_fen: str, history: list[str]) -> str:
+    fields = pyffish.get_fen(variant, start_fen, history).split()
+    return f"{fields[5]}. " if fields[1] == "w" else f"{fields[5]}... "
+
+
+def _clean_site(value: str) -> str:
+    match = re.search(r"https?://[^)\s\]]+", value)
+    return match.group(0) if match else (value or "?")
+
+
+def _pgn_date(value: str) -> str:
+    match = re.search(r"\b([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{4})\b", value)
+    if not match:
+        return "????.??.??"
+    try:
+        return datetime.strptime(" ".join(match.groups()), "%b %d %Y").strftime("%Y.%m.%d")
+    except ValueError:
+        return "????.??.??"
+
+
+def _escape_pgn_header(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')

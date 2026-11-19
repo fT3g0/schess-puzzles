@@ -12,3 +12,17 @@
 CREATE INDEX IF NOT EXISTS idx_suggestions_created_at ON suggestions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_suggestions_ip_hash ON suggestions(ip_hash, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS contact_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  message TEXT NOT NULL,
+  page_url TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  ip_hash TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_contact_messages_created_at ON contact_messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contact_messages_ip_hash ON contact_messages(ip_hash, created_at DESC);
