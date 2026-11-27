@@ -15,6 +15,7 @@ access_token.txt
 /data/puzzles/
 /data/profiles/
 /data/suggestions/
+/data/contacts/
 /data/complexity/*.json
 /data/complexity/lichess_rating_sample.csv
 /logs/

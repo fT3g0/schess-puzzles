@@ -409,6 +409,25 @@ Generate the current web payload from the combined report:
 python -m schess_puzzles.cli export-web data\puzzles\all_report.jsonl web\public\puzzles.json
 ```
 
+### Incremental Report Builds
+
+`combine-reports` keeps a local, versioned enrichment cache in
+`data/cache/report_enrichment/`. Unchanged batch reports reuse their stored
+derived metadata (flags, material, quality, clarity, SAN, and categories), so
+normal runs only enrich new or modified batches. The final combined JSONL is
+still rebuilt atomically from the cached reports, which preserves global
+deduplication and makes interruption safe.
+
+To deliberately rebuild all derived metadata after changing a categorization
+rule, use:
+
+```powershell
+python -m schess_puzzles.cli combine-reports --glob "data/puzzles/*_batch*_report.jsonl" --output data\puzzles\all_report.jsonl --rebuild-enrichment
+```
+
+The command prints cache and record progress every 500 records by default.
+`--progress-every 0` disables those progress lines.
+
 Run the local static site:
 
 ```powershell

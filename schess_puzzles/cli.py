@@ -21,6 +21,13 @@ from .selector import SelectionConfig, evaluate_position, positions_from_pgn, se
 from .schess_pgn import read_headers
 
 
+# Increment whenever derived report/web metadata changes.  Cached batch reports
+# from an older version are rebuilt automatically on the next combine.
+REPORT_METADATA_VERSION = 2
+DEFAULT_ENRICHMENT_CACHE_DIR = Path("data/cache/report_enrichment")
+DEFAULT_ENRICHMENT_MANIFEST = Path("data/cache/report_enrichment_manifest.json")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="schess-puzzles")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -382,6 +389,10 @@ def main() -> None:
     combine_reports.add_argument("reports", nargs="*", type=Path)
     combine_reports.add_argument("--glob")
     combine_reports.add_argument("--output", type=Path, default=Path("data/puzzles/chesscom_all_report.jsonl"))
+    combine_reports.add_argument("--enrichment-cache-dir", type=Path, default=DEFAULT_ENRICHMENT_CACHE_DIR)
+    combine_reports.add_argument("--enrichment-manifest", type=Path, default=DEFAULT_ENRICHMENT_MANIFEST)
+    combine_reports.add_argument("--rebuild-enrichment", action="store_true")
+    combine_reports.add_argument("--progress-every", type=int, default=500)
 
     selfplay = subparsers.add_parser("selfplay")
     selfplay.add_argument("--config", default="config.toml")
@@ -462,7 +473,15 @@ def main() -> None:
     elif args.command == "reextend-report":
         _reextend_report(Path(args.config), args)
     elif args.command == "combine-reports":
-        _combine_reports(args.reports, args.glob, args.output)
+        _combine_reports(
+            args.reports,
+            args.glob,
+            args.output,
+            cache_dir=args.enrichment_cache_dir,
+            manifest_path=args.enrichment_manifest,
+            rebuild_enrichment=args.rebuild_enrichment,
+            progress_every=args.progress_every,
+        )
     elif args.command == "selfplay":
         _selfplay(Path(args.config), args)
 
@@ -2538,22 +2557,54 @@ def _record_to_selection(record: dict, line: list[str]):
         flags=tuple(record.get("flags") or ()),
     )
 
-def _combine_reports(reports: list[Path], glob_pattern: str | None, output: Path) -> None:
+def _combine_reports(
+    reports: list[Path],
+    glob_pattern: str | None,
+    output: Path,
+    *,
+    cache_dir: Path = DEFAULT_ENRICHMENT_CACHE_DIR,
+    manifest_path: Path = DEFAULT_ENRICHMENT_MANIFEST,
+    rebuild_enrichment: bool = False,
+    progress_every: int = 500,
+) -> None:
     inputs = list(reports)
     if glob_pattern:
         inputs.extend(sorted(Path().glob(glob_pattern)))
     if not inputs:
         inputs = sorted(Path().glob("data/puzzles/chesscom_batch*_report.jsonl"))
+
+    inputs = [path for path in dict.fromkeys(inputs) if path != output and path.exists() and not path.name.startswith(("confirm_", "checkflags_"))]
+    manifest = _load_enrichment_manifest(manifest_path)
+    cached_inputs: list[Path] = []
+    refreshed = 0
+    reused = 0
+    for index, path in enumerate(inputs, start=1):
+        cached_path, cache_hit = _cached_enriched_report(
+            path,
+            cache_dir=cache_dir,
+            manifest=manifest,
+            rebuild=rebuild_enrichment,
+            progress_every=progress_every,
+        )
+        cached_inputs.append(cached_path)
+        if cache_hit:
+            reused += 1
+        else:
+            refreshed += 1
+        if progress_every and (index == len(inputs) or index % progress_every == 0):
+            print(f"Enrichment cache: reports={index}/{len(inputs)} reused={reused} refreshed={refreshed}")
+    _write_json_atomic(manifest_path, manifest)
+
     records: list[dict] = []
     seen: set[tuple] = set()
-    for path in inputs:
-        if path == output or not path.exists() or path.name.startswith(("confirm_", "checkflags_")):
-            continue
+    total_records = 0
+    for path in cached_inputs:
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
                     continue
-                record = _enrich_report_record(json.loads(line))
+                total_records += 1
+                record = json.loads(line)
                 key = (
                     record.get("source"),
                     record.get("fen"),
@@ -2565,12 +2616,75 @@ def _combine_reports(reports: list[Path], glob_pattern: str | None, output: Path
                     continue
                 seen.add(key)
                 records.append(record)
+                if progress_every and total_records % progress_every == 0:
+                    print(f"Combining reports: records={total_records} unique={len(records)}")
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8") as handle:
+    _write_jsonl_atomic(output, records)
+    print(
+        f"Wrote {output} with {len(records)} tactic(s) from {len(inputs)} report file(s) "
+        f"(cache reused={reused}, refreshed={refreshed})"
+    )
+
+
+def _load_enrichment_manifest(path: Path) -> dict:
+    if not path.exists():
+        return {"version": 1, "metadata_version": REPORT_METADATA_VERSION, "reports": {}}
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"version": 1, "metadata_version": REPORT_METADATA_VERSION, "reports": {}}
+    if manifest.get("metadata_version") != REPORT_METADATA_VERSION:
+        return {"version": 1, "metadata_version": REPORT_METADATA_VERSION, "reports": {}}
+    if not isinstance(manifest.get("reports"), dict):
+        manifest["reports"] = {}
+    return manifest
+
+
+def _cached_enriched_report(
+    path: Path,
+    *,
+    cache_dir: Path,
+    manifest: dict,
+    rebuild: bool,
+    progress_every: int,
+) -> tuple[Path, bool]:
+    resolved = str(path.resolve())
+    stat = path.stat()
+    fingerprint = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    cache_name = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:20] + ".jsonl"
+    cache_path = cache_dir / cache_name
+    previous = manifest["reports"].get(resolved)
+    if not rebuild and previous and previous.get("fingerprint") == fingerprint and cache_path.exists():
+        return cache_path, True
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    records: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for index, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            records.append(_enrich_report_record(json.loads(line)))
+            if progress_every and index % progress_every == 0:
+                print(f"Enriching {path.name}: records={index}")
+    _write_jsonl_atomic(cache_path, records)
+    manifest["reports"][resolved] = {"fingerprint": fingerprint, "cache": str(cache_path)}
+    return cache_path, False
+
+
+def _write_jsonl_atomic(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(f"Wrote {output} with {len(records)} tactic(s) from {len(inputs)} report file(s)")
+    temporary.replace(path)
+
+
+def _write_json_atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 def _export_web(report_jsonl: Path, output_json: Path) -> None:
     hidden_flags = {"standard-like", "trivial-recapture", "trivial-capture", "trivial-capture-cleanup", "check-evasion", "manual-reject", "failed-reverify"}
@@ -2584,7 +2698,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
             flags = record.get("flags", [])
             if hidden_flags & set(flags):
                 continue
-            solution_line_san = _web_line_san(record)
+            solution_line_san = record.get("solution_line_san") or _web_line_san(record)
             mate_line = _web_mate_line(record)
             mate_start_fen = str(record.get("bonus_mate_start_fen") or "")
             mate_line_san = str(record.get("bonus_mate_line_san") or (_web_line_san_for_fen(mate_start_fen, mate_line) if mate_line and mate_start_fen else ""))
@@ -2617,7 +2731,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
                     "material": record.get("material", {}),
                     "dedupe": record.get("dedupe", {}),
                     "tags": flags,
-                    "categories": _web_categories(record, flags),
+                    "categories": record.get("web_categories") or _web_categories(record, flags),
                     "hidden_by_default": bool(hidden_flags & set(flags)),
                 }
             )
@@ -2628,8 +2742,7 @@ def _export_web(report_jsonl: Path, output_json: Path) -> None:
         "count": len(puzzles),
         "puzzles": puzzles,
     }
-    output_json.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json_atomic(output_json, payload)
     print(f"Wrote {output_json} with {len(puzzles)} puzzle(s)")
 
 def _enrich_report_record(record: dict) -> dict:
@@ -2648,6 +2761,9 @@ def _enrich_report_record(record: dict) -> dict:
     record["quality"] = _record_quality_metadata(record, line)
     record["clarity"] = record_clarity(record, line)
     record["dedupe"] = _record_dedupe_metadata(record, line)
+    record["solution_line_san"] = _web_line_san(record)
+    record["web_categories"] = _web_categories(record, record["flags"])
+    record["metadata_version"] = REPORT_METADATA_VERSION
     return record
 
 
